@@ -1,0 +1,321 @@
+--Coroutine multi-task manager
+
+require "vector"
+require "hashmap"
+--require "coroutine"
+require "thread"
+
+global mutex: C.mtx_t
+assert(C.mtx_init(&mutex, C.mtx_plain) == C.thrd_success)
+
+global function _tm_lock()
+  --assert(C.mtx_lock(&mutex) == C.thrd_success)
+end
+global function _tm_unlock()
+  --assert(C.mtx_unlock(&mutex) == C.thrd_success)
+end
+
+local function_concept: type = #[concept(function(x) return x.type.is_function end)]#
+global function tm_safeOperation(block:function_concept)<inline>
+	_tm_lock()
+	local rtn=block()
+	_tm_unlock()
+	return rtn
+end
+
+global function MemAlloc(size: cuint): pointer <cimport,nodecl> end
+global function WaitTime(seconds: float64): void <cimport,nodecl> end
+
+--local function_concept:type = @function(*coroutine,pointer):byte
+global lock:byte = 0
+local _tm_states:type = @enum(byte){
+	DEAD = 0,
+	INITIALIZATING = 1,
+	READY = 2,
+	RUNNING = 3,
+	RETURNING = 4,
+}
+local _tm_thread:type = @record{
+	th:C.thrd_t,
+	--inUse:boolean,
+	class:uint64,
+	--maxStillTime:uint64,
+	--timeSinceLastCall:uint64,
+	id:int64,
+	state:_tm_states,
+	rtn:pointer,
+	--arg:pointer
+}
+local threadPool:hashmap(uint64,vector(*_tm_thread))
+local chunkremesh_UsedThreads:vector([2]uint64)
+
+--local _tm_states:hashmap(uint64,vector(boolean))
+local _th_item:type=@record{class:uint64,arg:pointer}
+local _th_queue:vector(*_th_item)
+local _th_classIndex:hashmap(uint64,function(pointer--[[*[7]ModelObject]]))
+
+local function getTr(class:uint64,idx:uint64):*_tm_thread
+	return threadPool:peek(class)[idx]
+end
+
+local function _tm_isWorking(class:uint64,idx:uint64):boolean
+	local thr = threadPool:peek(class)[idx]
+	--print(#threadPool:peek(class),thr)
+	if thr == nilptr then return panic "thread does not exist ???" end
+	--local status = thr.th.state()
+	if (thr.state == _tm_states.RUNNING) then-- or (thr.th:status() == "dead")) then
+		return true
+	end
+
+	for i = 0,#chunkremesh_UsedThreads-1 do
+		if chunkremesh_UsedThreads[i][1]==thr.id then
+			return true		end
+	end
+
+	return false
+end
+
+--local return_mutex: C.mtx_t
+global function tm_return(class:uint64,idx:uint64,obj:pointer--[[*[7]ModelObject]]) <inline>
+	--lock = 0
+	--assert(coroutine.yield(obj)==true)
+  --assert(C.mtx_lock(&return_mutex) == C.thrd_success)
+
+	threadPool[class][idx].rtn=obj
+	threadPool[class][idx].state=_tm_states.RETURNING
+
+  --assert(C.mtx_unlock(&return_mutex) == C.thrd_success)
+	--C.thrd_yield()
+	local thr = threadPool[class][idx]
+	while not thr.state ~= _tm_states.RUNNING do
+		C.thrd_yield()
+		--WaitTime(0.1)
+	end
+
+end
+
+--global dummyThread = coroutine.spawn(function(co:coroutine)while true do print() coroutine.yield() end end)
+--global rtn:pointer
+local _th_argQueue:vector(_th_item)
+global function _tm_resumeTh(thr:_tm_thread,arg:_th_item)
+	--assert(C.mtx_lock(&return_mutex) == C.thrd_success)
+	_th_argQueue:reserve(1)
+	_th_argQueue:push(arg)
+	--assert(C.mtx_unlock(&return_mutex) == C.thrd_success)
+end
+
+global function tm_getArgs(class:uint64,idx:uint64)
+	while true do
+		for _ = 0,25 do
+			_tm_lock()
+			if #_th_argQueue <= 0 then  
+				_tm_unlock()
+				return nilptr
+			end
+			for i = 0,#_th_argQueue-1 do
+				if _th_argQueue[i].class == class then
+					local r = _th_argQueue[i].arg
+					_th_argQueue[i].class = 0xFFFFFFFFFFFFFF_u
+					--print(i,#_th_argQueue)
+					--_th_argQueue:remove(i)
+					local thr = getTr(class,idx)
+					thr.state=_tm_states.RUNNING
+					_tm_unlock()
+					return r
+				end
+			end
+			_tm_unlock()
+
+		end
+		C.thrd_yield()
+	end
+	return nilptr
+end
+
+global function tm_initThread(args:pointer,class:*uint64,idx:*uint64) <inline>
+	--assert(C.mtx_lock(&return_mutex) == C.thrd_success)
+	local _args:pointer([2]uint64) = (@pointer([2]uint64))(args)
+	$class = _args[0]
+	$idx = _args[1]
+	getTr($class,$idx).state=_tm_states.READY
+	--assert(C.mtx_unlock(&return_mutex) == C.thrd_success)
+end
+
+global function tm_newThread(f:function(pointer):cint--[[:[7]ModelObject]], classresolver:function(pointer--[[[7]ModelObject]]),class:uint64)
+	--assert(C.mtx_lock(&return_mutex) == C.thrd_success)
+		local thr:*_tm_thread = (@pointer(_tm_thread))(MemAlloc(#_tm_thread))
+	do
+		class = class or (-(#threadPool)+1)
+		local idx:uint64 = #threadPool[class] or 0
+		_th_classIndex[class] = classresolver
+		print("preparing node ",idx)
+		--local rtn,err=coroutine.spawn(f,class,idx)
+		--if #err>0 then print(err) return 0 end
+		local arg:*[2]uint64 = (@pointer([2]uint64))(MemAlloc(#@[2]uint64))
+		arg[0] = class
+		arg[1] = idx
+		threadPool[class]:push(thr)
+  	assert(C.thrd_create(&threadPool[class][idx].th, f, (@pointer)(arg)) == C.thrd_success)
+		--thr.th = rtn
+		--lock=0
+		--thr.th:resume(class,idx)
+	
+		--while lock==1 do
+		--	print("________")
+		--end
+	
+		--thr.th:resume("hello")
+		thr.class=class
+		thr.id=idx
+		thr.state=_tm_states.INITIALIZATING
+		
+		print(class,idx,_tm_isWorking(class,idx),#threadPool[class])
+		print("done node ",idx)
+	end
+	--assert(C.mtx_unlock(&return_mutex) == C.thrd_success)
+	--assert(thr.th:status()~="dead")
+	return thr.id
+end
+
+global function tm_updateThreads()----------------------------------------------------------------
+	--Where the bigger the number, the worse the health
+	local threadPoolHealth:uint64 = 0
+	--print(#chunkremesh_UsedThreads,#_th_queue)
+  for id = #chunkremesh_UsedThreads-1,0,-1 do
+  	--print(id)
+  	if id<0 then continue end
+		local threadId:[2]uint64 = chunkremesh_UsedThreads[id]
+    if threadId then
+    	--print(threadId[0],threadId[1])
+      local thread = getTr(threadId[0],threadId[1])
+
+      --print(thread.state)
+      if thread.state==_tm_states.RETURNING then
+      	--print(thread.th)
+				--local data:pointer--*[7]ModelObject
+				--coroutine.pop(thread.th,&data)
+				--if not data then continue end
+				--assert(C.mtx_lock(&return_mutex) == C.thrd_success);
+				local func = _th_classIndex[thread.class]
+				func(thread.rtn)
+        chunkremesh_UsedThreads:remove(id)
+        thread.state = _tm_states.READY
+        --assert(C.mtx_unlock(&return_mutex) == C.thrd_success)
+      end
+    end
+  end
+  -----------------------------------------------
+  --print(#_th_queue)
+  for id = #_th_queue-1,0,-1 do 
+  	if id<0 then continue end
+  	local item:*_th_item = _th_queue[id]
+  	for i=0,#threadPool[item.class]-1 do
+  		local thr = getTr(item.class,i)
+  		--print(i,thr.state==_tm_states.RUNNING)
+  		--print(id,i,_tm_isWorking(item.class,i),getTr(item.class,i).th:status())
+  		if i<0 then continue end
+  		if thr.state~=_tm_states.READY then continue end
+
+  		--dummyThread:push(item.arg)
+  		--rtn = item.arg
+  		--print(item.arg,#@pointer)
+
+  		_tm_resumeTh(thr,item)
+  		chunkremesh_UsedThreads:push({item.class,i})
+  		item.class = 0xFFFFFFFFFFFFF_u
+  		--_th_argQueue:push(item)
+  		--print(_th_queue:pop())
+  		break
+  	end
+  	--break
+  end
+
+  for _,thread in pairs(threadPool) do
+  	for threadId = 0,#thread-1 do
+  		--print(thread[threadId].th:status())
+      if thread[threadId].state==_tm_states.DEAD then threadPoolHealth = threadPoolHealth +1 end
+    end
+  end
+
+
+  return threadPoolHealth
+end
+
+global function tm_push(class:uint64,arg:pointer)
+	local obj:*_th_item=(@pointer(_th_item))(MemAlloc(#_th_item))
+	obj.class=class
+	obj.arg=arg
+	print(class,arg,#_th_queue)
+	_th_queue:push(obj)
+end
+
+--[[
+	local classFunction:type = @record{
+	f:*function_concept,
+	class:uint64
+	}
+	
+	local _th_container:vector(_tm_thread)
+	local _th_classIndex:hashmap(*function_concept,int64)
+	local _th_deletionQueue:vector(*_tm_thread)
+	local _th_operationQueue:vector(uint64)
+	--local _tm_thOut:hashmap(uint64,vector(pointer))
+	
+	--local function _tm_getLastClassId
+	
+	global function tp_return(obj:pointer)
+	coroutine.yield(obj)
+	coroutine.yield()
+	end
+	
+	global function tm_newThread(f:function_concept, arg:*[0]pointer, resolver:*function_concept,class:int64,timeout:uint64)
+	_th_classIndex[resolver] = class or -#_th_container
+	_th_container:push({th=coroutine.create(f),inUse=false,class=class,maxStillTime=timeout,timeSinceLastCall=0,id=#_th_container-1,arg=arg})
+	return #_th_container-1
+	end
+	
+	local function _tm_isWorking(thr:*_tm_thread,idx:uint32):boolean
+	if ((thr.th:status() == 'suspended') or (thr.th:status() == "dead")) and thr.inUse==true then
+		thr.inUse = false
+	end
+	return thr.inUse
+	end
+	
+	local function _tm_markForDeletion(thr:*_tm_thread)
+	_th_deletionQueue:push(thr)
+	end
+	
+	local function _tm_updateThread(thr:*_tm_thread,idx:uint32)
+	local status = thr.th:status()
+	if status == "dead" then _tm_markForDeletion(thr) return end
+	if status == "suspended" and thr.inUse==true then
+		--coroutine.resume(thr.th,_tm_thOut[thr.id],thr.arg)
+		thr.th:pop()
+	end
+	end
+	
+	global function tm_update()
+	--Updating thread state
+	for i:uint32 = 0,#_th_container-1 do
+		_tm_updateThread(_th_container[i],i)
+		if not _tm_isWorking(_th_container[i],i) then
+			_th_container[i].timeSinceLastCall = _th_container[i].timeSinceLastCall + 1
+		end
+	end
+
+	--
+	for i:uint32 = 0,#_th_operationQueue-1 do
+		local id = _th_operationQueue[i]
+		if not _tm_isWorking(_th_container[i],i) and _th_container[i].th:status()~="dead" then
+			
+		end
+	end
+	for i:uint64 = 0,#_th_deletionQueue-1 do
+		_th_container:removevalue(_th_deletionQueue[i])
+	end
+	end
+	
+	global function tm_push(id:uint64)
+	_th_operationQueue:push(id)
+	end
+]]

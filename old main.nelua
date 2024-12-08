@@ -1,0 +1,777 @@
+--## linklib "raylib/raylib.h"
+## cdefine 'RLIGHTS_IMPLEMENTATION'
+require "raylib/raylib"
+
+--## cinclude '<raylib/rlights.h>'
+
+-- Constants
+--------------------------------------------------------------------------------------
+local inf:float64 = 9e+10000
+local SCREEN_WIDTH: uint16 <const> = 1000
+local SCREEN_HEIGHT: uint16 <const> = 650
+local OCTREE_BESTMATCH:byte = 0
+local Vertex = @record{
+	--Coordinates Of the vertex
+	x :float32,
+	y :float32,
+	z :float32,
+	--Texture position of the vertex
+	u :float32,
+	v :float32,
+	--I don't know but still required
+	nx :float32,
+	ny :float32,
+	nz :float32,
+	--Vertex color
+	r :byte,
+	g :byte,
+	b :byte,
+	a :byte
+}
+
+local EMPTY_CLASS:byte = 0
+local CHUNK_CLASS:byte = 1
+local OCTREE_CLASS:byte = 2
+local CUBE_CLASS:byte = 3
+
+local float32Pointer = @pointer(float32)
+local cushortPointer = @pointer(cushort)
+local function AllocateMeshData(mesh:*Mesh,triangleCount:integer)
+	mesh.vertexCount = triangleCount*3
+	mesh.triangleCount = triangleCount
+
+	mesh.vertices = --[[pointer(float32)(]]float32Pointer(MemAlloc(mesh.vertexCount * 3 * #float32))
+	mesh.texcoords = --[[pointer(float32)(]]float32Pointer(MemAlloc(mesh.vertexCount * 2 * #float32))
+	--mesh.normals = --[[pointer(float32)(]]float32Pointer(MemAlloc(mesh.vertexCount * 3 * #float32))
+	--mesh.indices = cushortPointer(MemAlloc(mesh.vertexCount*#cushort))
+end
+
+local function calculateNormal(p1:Vector3,p2:Vector3,p3:Vector3)
+	return Vector3CrossProduct(p2-p1,p3-p1)
+end
+
+--------------------------------------------------------------------------------------
+
+-- Initialization
+--------------------------------------------------------------------------------------
+
+-- Version : g.M.m.wd = g Great RoadStone
+--                      M Major breakdown
+--                      m minor breakdown
+--                      w weeks since last commit
+--                      d days  since last commit
+InitWindow(SCREEN_WIDTH,SCREEN_HEIGHT, "WhaleBlock v.0.0.0.00")
+
+local camera = Camera3D{} -- Define the camera to look into our 3d world
+camera.position = Vector3{ 10, 10, 10 } -- Camera position
+camera.target = Vector3{ 0, 0, 0 } -- Camera looking at point
+camera.up = Vector3{ 0, 1, 0 } -- Camera up vector (rotation towards target)
+camera.fovy = 45 -- Camera field-of-view Y
+camera.projection = 0 -- Camera projection type
+
+DisableCursor() -- Limit cursor to relative movement inside the window
+
+SetTargetFPS(1024)
+
+------DATA For ChunkRemesh
+local time_sample = GetTime()
+--local cubePosition = Vector3{ 0, 0, 0 }
+global chunkSize:uint16 <comptime> = 16
+global chunkBlockSize:integer <comptime> = chunkSize*chunkSize*chunkSize
+print(#pointer)
+--[==[]==]
+
+global Cube: type = @record{
+	x:int32,
+	y:int32,
+	z:int32,
+	s:int32,
+}
+--Actually AABB check
+function Cube.__add(C1:*Cube,C2:*Cube)
+	if (C2.s+C2.x >= C1.x or C2.s+C2.y >= C1.y  or C2.s+C2.z >= C1.z) or (C1.s+C1.x >= C2.x or C1.s+C1.y >= C2.y  or C1.s+C1.z >= C2.z) then
+	return true end
+	return false
+end
+--
+function Cube.__index(cube:*Cube,key:integer):int32
+	switch key do
+	case 0 then return cube.x
+	case 1 then return cube.y
+	case 2 then return cube.z
+	case 3 then return cube.s
+	else error("Cube indexing is limited to 0-3")
+	end
+	return 0
+end
+--Actually Distance
+function Cube.__sub(c1:*Cube,c2:*Cube)
+	return Vector3Distance(Vector3{c1.x,c1.y,c1.z},Vector3{c2.x,c2.y,c2.z})
+end
+function Cube:toVec()
+	return Vector3{self[0],self[1],self[2]}
+end
+require 'chunk'
+--[[
+local CHUNK_STATES = @enum{
+	NEW=0,
+	EMPTY=1,
+	GENERATED=2,
+	MODEL_DONE=3
+}
+local Chunk: type = @record{
+	blockArray:[chunkBlockSize]byte,
+	blockDictionary:[#byte]uint32,
+	blockAmount:uint32,
+	pos:Cube,
+	state:CHUNK_STATES,
+	--root:pointer,
+	model:Model
+}
+function Chunk.__atindex(chk:*Chunk,key:integer)
+	return chk.blockArray[key] end
+function Chunk.__index(chk:*Chunk,key:integer)
+	return chk.blockArray[key] end
+function Chunk:draw()
+	--DrawModel(self.model,Vector3{0,0,0},1.0,WHITE)
+	--print(self.pos[0] * chunkSize,self.pos[1] * chunkSize,self.pos[2] * chunkSize)
+	DrawModel(self.model,Vector3{self.pos[0],self.pos[1],self.pos[2]},1.0,WHITE)
+end
+local d_Empty_Chunk:Chunk
+d_Empty_Chunk.state = CHUNK_STATES.EMPTY
+print(#@Chunk)]]
+
+--[=[
+local OctreeType = @enum{
+	EMPTY=0,
+	MAIN_BRANCH=1,
+	LEAF=2,
+	ROOT_EMPTY=3,
+	ROOT_MAIN_BRANCH=4,
+	ROOT_LEAF=5
+}
+
+local Octree: type = @record{
+	class:[8]byte,
+	branch: [8]pointer,
+	root: *Octree,
+	rootIndex:byte,
+	type:byte,
+	pos:Cube
+}
+
+function Octree:recheckType()
+	--Iterating through all branches
+	for i = 0,7 do
+		--if a branch exists then
+		if self.branch[i] ~= nilptr then
+			if self.branch[i] == @Octree then
+				if self.type == OctreeType.EMPTY then self.type = OctreeType.MAIN_BRANCH end
+				if self.type == OctreeType.ROOT_EMPTY then self.type = OctreeType.ROOT_MAIN_BRANCH end
+			else
+				if self.type == OctreeType.EMPTY then self.type = OctreeType.LEAF end
+				if self.type == OctreeType.ROOT_EMPTY then self.type = OctreeType.ROOT_LEAF end
+			end
+		end
+	end
+	if self.root == nilptr and self.type < 2 then self.type = self.type + 3 end
+end
+
+function Octree:freeFromRoot()
+	--To make the Octree not to be indexed as root thus destroying implementation
+	if self.type<2 then	self.type = self.type - 3; return end
+	
+	--Making the Octree's root 'forget' about him
+	local rootO = self.root
+	rootO.branch[self.rootIndex] = nilptr
+
+	--For allowing better branching
+	rootO:recheckType()
+end
+
+function Octree.InsertSubNode(O1:*Octree,O2:*Octree,index:byte)
+	if O1.branch[index] ~= nilptr then return false end
+	if O2.type>2 then O2:freeFromRoot(); O2.type = O2.type - 3 end
+	O1.branch[index] = O2
+	O2.root = O1
+	O2.rootIndex=index
+
+	return true
+end
+
+function Octree.AppendToSupperNode(O2:*Octree,O1:*Octree,index:byte)
+	if O1.branch[index] ~= nilptr then return false end
+	if O2.type>2 then O2:freeFromRoot(); O2.type = O2.type - 3 end
+	O1.branch[index] = O2
+	O2.root = O1
+	O2.rootIndex=index
+
+	return true
+end
+
+function Octree:getObjAtPos(pos:[3]int32,DefaultReturn:pointer):pointer
+	--print(pos[0],pos[1],pos[2])
+	local currentOctree = self
+	local box:Cube = {pos[0],pos[1],pos[2],1}
+	while true do
+		if currentOctree.type==OctreeType.ROOT_EMPTY then return nilptr end
+		if box+currentOctree.pos then
+			for i = 0,7 do
+				if currentOctree.class[i]~=0 then
+					print(currentOctree.class[i])
+				end
+				if CHUNK_CLASS==currentOctree.class[i] and (@pointer(Chunk))(currentOctree.branch[i]).pos+box then
+					return currentOctree.branch[i]
+				elseif OCTREE_CLASS==currentOctree.class[i] and (@pointer(Octree))(currentOctree.branch[i]).pos+box then
+					currentOctree=(@pointer(Octree))(currentOctree.branch[i])
+				break end
+				return DefaultReturn
+			end
+		else
+			currentOctree=currentOctree.root
+		end
+	end
+end
+
+require "traits"
+require "vector"
+local OctreePointer = @pointer(Octree)
+function Octree:draw()
+	local currentOctree:pointer = self
+	local stack:vector(byte) = {0}
+	local v:pointer
+	local i:byte
+	local cl:byte
+	while true do
+		--print(i,#stack)
+		i=stack[#stack-1]
+		if i > 7 then
+			if #stack == 1 then break end
+			stack:pop()
+			currentOctree = (@pointer)((@OctreePointer)(currentOctree).root)
+		continue end
+		v=(@pointer)((@OctreePointer)(currentOctree).branch[i])
+		cl=(@OctreePointer)(currentOctree).class[i]
+		--print(v,cl,i)
+		if 		 nilptr==v then stack[#stack-1] = i+1							; continue
+		elseif OCTREE_CLASS==cl then stack:push(i); currentOctree = v; continue
+		elseif CHUNK_CLASS==cl then stack[#stack-1] = i+1; (@ChunkPointer)(v):draw()		; continue
+		else stack[#stack-1] = i+1
+		end
+		--currentOctree.branch[i]:draw()
+	end
+end
+
+function Octree:hasEmpty():byte
+	for i = 0,7 do
+		if EMPTY_CLASS==self.class[i] then return i end
+	end return 8
+end
+
+function Octree:CollByIncDist(coll)
+	--local out:*Chunk
+	local distances:[8]float64 = {inf,inf,inf,inf,inf,inf,inf,inf}
+	for i = 0,7 do
+		if CHUNK_CLASS==self.class[i] and (@*Chunk)(self.branch[i]).pos+coll then 
+			distances[i] = (@*Chunk)(self.branch[i]).pos-coll
+		end
+	end
+	local tmp:float64 = 0
+	local last = 0
+	for i = 0,7 do
+		if distances[i]>tmp then tmp = distances[i];last=i end
+	end
+	return (@*Chunk)(self.branch[last])
+end
+
+function Octree:add(p:*Chunk,class:byte)
+	local pos:Cube=p.pos
+	local currentOctree:*Octree=self
+	while currentOctree:CollByIncDist(pos) do
+	end
+end
+
+local World: type = @record{
+	worldLayer:Octree,
+	metadata:*[256]uint64
+}
+
+local OverWorld:World = {}
+do
+	local _worldLayer:Octree = {}
+		_worldLayer.type = OctreeType.ROOT_MAIN_BRANCH
+		local _cube:Cube = {x=-2^29,y=-2^29,z=-2^29,s=2^30}
+		_worldLayer.pos = _cube
+		for i = 0,7 do
+			_worldLayer.class[i] = EMPTY_CLASS
+		end
+		--_worldLayer.class = &OCTREE_CLASS
+		OverWorld.worldLayer = _worldLayer
+end
+--]=]
+
+require "hashmap"
+--local ChunkPointer  = @pointer(Chunk)
+local WORLD:hashmap([3]int32,*Chunk)
+
+--[[local function getChunk(x:int32,y:int32,z:int32):pointer(Chunk)
+	local object = OverWorld.worldLayer:getObjAtPos({x,y,z},&d_Empty_Chunk)
+	if object == nilptr or $object == OCTREE_BESTMATCH then return &d_Empty_Chunk end
+	return (@pointer(Chunk))(object)
+end]]
+--[[local function getChunk(x:int32,y:int32,z:int32):pointer(Chunk)
+	local chk=WORLD:peek({math.floor(x/chunkSize),math.floor(y/chunkSize),math.floor(z/chunkSize)})
+		if chk~=nilptr and $chk then
+			return $chk
+		end return &d_Empty_Chunk
+end
+
+local function getBlock(chunk:*Chunk,x:int32,y:int32,z:int32):byte--uint32
+	--if (x<0 or y<0 or z<0 or x>chunkSize-1 or y>chunkSize-1 or z>chunkSize-1) then
+		--return 0
+		local pos=chunk.pos:toVec()+Vector3{x,y,z}
+
+		x,y,z=pos.x,pos.y,pos.z
+		---print(x,y,z,"help",x%chunkSize,y%chunkSize,z%chunkSize);
+		--return getBlock(getChunk(x + chunk.pos[0],y + chunk.pos[1],z + chunk.pos[2]),x%chunkSize,y%chunkSize,z%chunkSize,true)
+		--print(math.floor(x/chunkSize),math.floor(z/chunkSize))
+		local chk=WORLD:peek({math.floor(x/chunkSize),math.floor(y/chunkSize),math.floor(z/chunkSize)})
+		if chk~=nilptr and $chk then
+			return ($chk).blockArray[x%chunkSize*chunkSize*chunkSize+y%chunkSize*chunkSize+z%chunkSize]
+		end return 0
+	--end
+	-- or y<0 or z<0 or x>chunkSize-1 or y>chunkSize-1 or z>chunkSize-1 then return 0 end
+	--print(x,y,z,chunk.blockArray[x*chunkSize*chunkSize + y*chunkSize + z])
+	return 0 end--chunk.blockArray[x*chunkSize*chunkSize + y*chunkSize + z] end
+
+local function setBlock(chunk:*Chunk,x:uint32,y:uint32,z:uint32,v:byte)
+	chunk.blockArray[x*chunkSize*chunkSize + y*chunkSize + z] = v end
+]]
+
+-- We generate a checked image for texturing
+--local checked:Image = GenImageChecked(2, 2, 1, 1, RED, GREEN)
+--local texture:Texture2D = LoadTextureFromImage(checked)
+--[=[UnloadImage(checked)
+local texture = LoadTexture("assets/TexturePack.png")
+local tileSize = 16
+local textureUV_Size:Vector2 = {tileSize/texture.width,tileSize/texture.height}
+local TEXTURE_UVS_INDEX = @enum{
+	GRASS = 0,
+	DIRT = 2,
+	GRASSDIRT = 1,
+}
+print(textureUV_Size.x,textureUV_Size.y,2/textureUV_Size.x,2/textureUV_Size.y)
+local TEXTURE_UVS:[25]Vector2 = {
+	Vector2{1*textureUV_Size.x,1*textureUV_Size.y},
+	Vector2{2*textureUV_Size.x,1*textureUV_Size.y},
+	Vector2{3*textureUV_Size.x,1*textureUV_Size.y},
+}
+
+--[[
+local test:[6][6]Vector3 = {
+	{ {0,0,0}, {1,0,0}, {1,1,0}, {0,0,0}, {1,1,0}, {0,1,0}, },
+	{ {0,0,0}, {0,1,0}, {0,1,1}, {0,0,0}, {0,1,1}, {0,0,1}, },
+	{ {0,0,0}, {0,0,1}, {1,0,1}, {0,0,0}, {1,0,1}, {1,0,0}, },
+}--]]
+local rev:[6][2]boolean ={
+    	{true,true},
+    	{false,false},
+    	{false,true},
+    	{false,false},
+    	{true,true},
+    	{true,false},
+    }
+local function addFace(mesh:*Mesh,dataindex:*integer,x:int32,y:int32,z:int32, mx:byte,my:byte,mz:byte, uv:Vector2, c:float32,reverse:boolean,reverse2:boolean)
+	local u,v = uv.x,uv.y
+	local i:byte = 0
+	local g:[6]byte = {1,2,3,4,5,6}--{}--,6,5,4}
+    		local g2:[6]byte={3,2,1,6,5,4}
+	if reverse then g={3,2,1,6,5,4}	end
+	local primary:boolean
+	local secondary:boolean
+  for k=1,6 do
+  	i = g[k-1]
+    primary = i%2 == 1
+    secondary= i > 2 and i < 6
+    --print(x+(mx == 1 and primary and 1 or 0) + (mx == 2 and secondary and 1 or 0),y+(my == 1 and primary and 1 or 0) + (my == 2 and secondary and 1 or 0),z+(mz == 1 and primary and 1 or 0) + (mz == 2 and secondary and 1 or 0))
+    mesh.vertices[ $dataindex*3  ] = x + (mx == 1 and primary and 1 or 0) + (mx == 2 and secondary and 1 or 0) --test[i-1][0].x
+    mesh.vertices[ $dataindex*3+1] = y + (my == 1 and primary and 1 or 0) + (my == 2 and secondary and 1 or 0) --test[i-1][1].y
+    mesh.vertices[ $dataindex*3+2] = z + (mz == 1 and primary and 1 or 0) + (mz == 2 and secondary and 1 or 0) --test[i-1][2].z
+
+    if reverse2 then
+    	if reverse then 
+    		primary =  rev[k-1][0]
+    		secondary= rev[k-1][1]
+    	else
+    		primary =  rev[g2[k-1]-1][0]
+    		secondary= rev[g2[k-1]-1][1]
+    	end
+  	end
+    mesh.texcoords[$dataindex*2  ] = u - textureUV_Size.x*(primary and 1 or 0)
+    mesh.texcoords[$dataindex*2+1] = v - textureUV_Size.y*(secondary and 1 or 0)
+    --mesh.colors[$dataindex*4]  = c*255
+    $dataindex = $dataindex+1
+  end
+end
+
+local function genMesh(chunk: *Chunk)
+	local mapMesh:Mesh = {0}
+
+	--To quickly strip out invisible chunks
+	if chunk.blockAmount==0 then UploadMesh(&mapMesh,false); return mapMesh end
+	if chunk.blockAmount==chunkBlockSize then
+		if getChunk(chunk.pos[0]+chunkSize,chunk.pos[1],chunk.pos[2]).blockAmount ==chunkBlockSize and
+		   getChunk(chunk.pos[0]-chunkSize,chunk.pos[1],chunk.pos[2]).blockAmount ==chunkBlockSize and
+		   getChunk(chunk.pos[0],chunk.pos[1]+chunkSize,chunk.pos[2]).blockAmount ==chunkBlockSize and
+		   getChunk(chunk.pos[0],chunk.pos[1]-chunkSize,chunk.pos[2]).blockAmount ==chunkBlockSize and
+		   getChunk(chunk.pos[0],chunk.pos[1],chunk.pos[2]+chunkSize).blockAmount ==chunkBlockSize and
+		   getChunk(chunk.pos[0],chunk.pos[1],chunk.pos[2]-chunkSize).blockAmount ==chunkBlockSize then UploadMesh(&mapMesh,false); return mapMesh end
+	end
+
+--print()
+	local facecount = 0
+	for x:int32=0, chunkSize-1 do
+	  for y:int32=0, chunkSize-1 do
+	    for z:int32=0, chunkSize-1 do
+	      if getBlock(chunk, x,y,z) ~= 0 then
+	      	--print(x,y,z,getBlock(chunk, x,y,z))
+	        if getBlock(chunk, x+1,y,z) == 0 then facecount = facecount + 1 end
+  	      if getBlock(chunk, x-1,y,z) == 0 then facecount = facecount + 1 end
+    	    if getBlock(chunk, x,y+1,z) == 0 then facecount = facecount + 1 end
+      	  if getBlock(chunk, x,y-1,z) == 0 then facecount = facecount + 1 end
+          if getBlock(chunk, x,y,z+1) == 0 then facecount = facecount + 1 end
+          if getBlock(chunk, x,y,z-1) == 0 then facecount = facecount + 1 end
+        end
+  	  end
+  	end
+	end
+--print(facecount)
+	local count = facecount*6
+	if count > 0 then
+    local dataindex:int64 = 0
+    
+		AllocateMeshData(&mapMesh,facecount*2)
+    local emptyUV = Vector2{0,0}
+    for z=0, chunkSize-1 do
+      for x=0, chunkSize-1 do
+        for y=0, chunkSize-1 do
+          local b0,b1,b2,b3,b4,b5,b6 = getBlock(chunk, x,y,z),getBlock(chunk, x-1,y,z),getBlock(chunk, x+1,y,z),getBlock(chunk, x,y-1,z),getBlock(chunk, x,y+1,z),getBlock(chunk, x,y,z-1),getBlock(chunk, x,y,z+1)
+          if b0 ~= 0 then
+            if b1 == 0 then addFace(&mapMesh,&dataindex,x,y,z,   0,1,2, TEXTURE_UVS[TEXTURE_UVS_INDEX.GRASSDIRT],1,false,true) end
+            if b2 == 0 then addFace(&mapMesh,&dataindex,x+1,y,z, 0,1,2, TEXTURE_UVS[TEXTURE_UVS_INDEX.GRASSDIRT],1,true,true) end
+            if b3 == 0 then addFace(&mapMesh,&dataindex,x,y,z,   1,0,2, TEXTURE_UVS[TEXTURE_UVS_INDEX.DIRT],1,true) end
+            if b4 == 0 then addFace(&mapMesh,&dataindex,x,y+1,z, 1,0,2, TEXTURE_UVS[TEXTURE_UVS_INDEX.GRASS],1,false) end
+            if b5 == 0 then addFace(&mapMesh,&dataindex,x,y,z,   1,2,0, TEXTURE_UVS[TEXTURE_UVS_INDEX.GRASSDIRT],1,false) end
+            if b6 == 0 then addFace(&mapMesh,&dataindex,x,y,z+1, 1,2,0, TEXTURE_UVS[TEXTURE_UVS_INDEX.GRASSDIRT],1,true) end
+          end
+        end
+      end
+    end
+	end
+
+	--[[for i = 1,chunkSize do
+		for k = 1,chunkSize do
+			for j = 1,chunkSize do
+				if getBlock(&map,i-1,k-1,j-1) == 1 then
+					cubePosition = Vector3{i-1,k-1,j-1}
+					--(cubePosition, 1, 1, 1, GREEN)
+				end
+			end
+		end
+	end]]
+	UploadMesh(&mapMesh,false)
+	return mapMesh
+end
+
+
+local function genChunk(chunk:*Chunk, x:int32,y:int32,z:int32)
+	print(x,y,z)
+	if chunk.state>CHUNK_STATES.NEW then return end
+	chunk.state=CHUNK_STATES.GENERATED
+	--chunk.class = &CHUNK_CLASS
+	chunk.pos = Cube{chunkSize*x,chunkSize*y,chunkSize*z,chunkSize}
+	local tempImg = GenImagePerlinNoise(chunkSize,chunkSize,chunk.pos[0],chunk.pos[2],chunkSize/512)
+	--local tempImg = GenImagePerlinNoise(chunkSize,chunkSize,0,0,1/2)
+	--local size:cint = (chunkSize*chunkSize*#int32)
+	--local next = ExportImageAsCode(tempImg,"bmp.c")
+	--UnloadImage(testImg)
+	local blockAmount:uint32 = 0
+	for i = 1,chunkSize do
+		for k = 1,chunkSize do
+			for j = 1,chunkSize do
+				if GetImageColor(tempImg,(i-1),j-1).r>k+y*chunkSize then
+				--if j>chunkSize//2 or j == 1 then
+					setBlock(chunk,i-1,k-1,j-1,1)
+					blockAmount=blockAmount+1
+				else
+					setBlock(chunk,i-1,k-1,j-1,0)
+				end
+			end
+		end
+	end
+	chunk.blockAmount = blockAmount
+		--local heightMap = LoadTextureFromImage(tempImg)
+		--UnloadImage(tempImg)
+	--general_allocator:dealloc(&testImg)
+	--UnloadImage(testImg)
+	
+	--print(GetTime()-time_sample)
+	return chunk
+end
+
+
+local function facesId(pos:*Cube)
+    local a:int8,b:int8,c:int8,t:[6]pointer(Chunk)=0,0,0,{}
+    for d = 1,6 do
+        a,b,c =0,0,0
+        if     d == 1 then a=1
+        elseif d == 2 then a=-1
+        elseif d == 3 then b=1
+        elseif d == 4 then b=-1
+        elseif d == 5 then c=1
+        elseif d == 6 then c=-1
+        end
+        t[d-1]=getChunk(a*chunkSize+pos[0],b*chunkSize+pos[1],c*chunkSize+pos[2])
+    end
+    return t
+end
+
+local function setMesh(chunk:*Chunk)
+	--print(chunk.state)
+	if not(chunk.state==CHUNK_STATES.EMPTY) then
+		UnloadModel(chunk.model)
+		local mapMesh = genMesh(chunk)
+		local mapModel = LoadModelFromMesh(mapMesh)
+		mapModel.materials.maps.texture = texture
+		chunk.model=mapModel
+		chunk.state = CHUNK_STATES.MODEL_DONE
+	end
+end
+
+local function ReMesh(chunk:*Chunk)
+	--print(chunk.pos.x//chunkSize,chunk.pos.y//chunkSize,chunk.pos.z//chunkSize)
+	for k = 0,5 do
+		local v:pointer(Chunk) = facesId(chunk.pos)[k]
+		print(v.state)
+		if v and (v.state>CHUNK_STATES.EMPTY) then setMesh(v) end
+	end
+	if (chunk.state>CHUNK_STATES.EMPTY) then setMesh(chunk) end
+	--print(GetTime()-time_sample)
+end]=]
+
+----Shader
+
+local shader:Shader = LoadShader("lighting.vs","lighting.fs")
+  shader.locs[SHADER_LOC_VECTOR_VIEW] =  GetShaderLocation(shader, "viewPos");
+
+  -- Set shader value: ambient light level
+  local ambientLoc:cint = GetShaderLocation(shader, "ambient");
+  local var:[4]float64 = { 0.1, 0.1, 0.1, 100.0 }
+  SetShaderValue(shader, ambientLoc, &var, SHADER_UNIFORM_VEC4);
+
+  -- Create one light
+  --local light = CreateLight(LIGHT_POINT, Vector3{ 0.0, chunkSize*2, 0.0 }, Vector3Zero(), WHITE, shader);
+
+------------------------------------------------------------------------------------
+
+global function drawing(block: function()) <inline>
+  BeginDrawing()
+  block()
+  DrawFPS(10, 10);
+  --DrawTexture(heightMap,0,30,WHITE)
+  EndDrawing()
+end
+
+global function Mode3D(camera: Camera3D ,block: function()) <inline>
+  BeginMode3D(camera)
+  BeginShaderMode(shader)
+  block()
+  --Draw
+	--DrawCube(Vector3{0,chunkSize*2,0}, 1, 1, 1, BLACK)
+  EndShaderMode()
+  EndMode3D()
+end
+
+require "coroutine"
+--local dummy:coroutine = coroutine.create(function(co:coroutine)end)
+local dummy:vector([7]ModelObject)
+local used_threads:[125]boolean
+local mesher:[5*5*5]coroutine
+global x:int32,y:int32,z:int32=-2^31,-2^31,-2^31
+for k=0,124 do
+	used_threads[k] = false
+	mesher[k] = coroutine.spawn(function(co: coroutine)--,world: t_worldMap, x: int32,y: int32,z: int32)
+		local world:*t_worldMap
+		--local x:int32,y:int32,z:int32=-2^31,-2^31,-2^31
+		local _x:int32,_y:int32,_z:int32
+		local i:uint64 = 1
+		local dummy1:*vector([7]ModelObject)
+		--local out:[7]ModelObject
+		while true do
+			--coroutine.pop(co,&world,&x,&y,&z)--@*t_worldMap,@*int32,@*int32,@*int32)
+			print(i,x,y,z,_x,_y,_z,world,&WORLD)
+			if (_x~=x) or (_y~=y) or (_z~=z) then
+				_x,_y,_z = x,y,z
+				--dummy1:push(calcReMesh(world,x,y,z))
+				--coroutine.push(co,calcReMesh(world,x,y,z))
+				--world[{x,y,z}].model ==
+				local curr:[7]ModelObject = calcReMesh(WORLD,_x,_y,_z)
+				for i = 0,6 do
+					local pos=curr[i].pos
+					if curr[i].empty or (pos.x==0 and pos.y==0 and pos.z==0) then continue end
+					print(pos.x,pos.y,pos.z)
+
+					--UnloadModel(WORLD[{pos.x,pos.y,pos.z}].model)
+					WORLD[{pos.x,pos.y,pos.z}].model = curr[i].model
+				end
+				coroutine.yield()
+			else coroutine.yield()
+			end
+			i = i+1
+		end
+	end,WORLD,0,0,0)
+end
+
+--Total amount of chunk meshed in parallel threads
+local it:uint64=0
+local function drawLoop()
+
+	local curr:[7]ModelObject
+	--[[for k=0,#dummy-1 do
+		local curr = dummy:pop()
+		it=it+1
+		for i = 0,6 do
+			local pos=curr[i].pos
+			if curr[i].empty or (pos.x==0 and pos.y==0 and pos.z==0) then continue end
+			print(pos.x,pos.y,pos.z)
+			--UnloadModel(WORLD[{pos.x,pos.y,pos.z}].model)
+			WORLD[{pos.x,pos.y,pos.z}].model = curr[i].model
+		end
+		--MemFree(&curr)
+	end]]
+
+	for k,v in pairs(WORLD) do
+		v:draw()
+		if v.state == CHUNK_STATES.GENERATED and not (v.pos.x==0 and v.pos.y==0 and v.pos.z==0) then
+			--dummy:push(calcReMesh(WORLD,v.pos.x,v.pos.y,v.pos.z))
+		end
+	end
+	local cameraPos = Vector3{ camera.position.x, camera.position.y, camera.position.z };
+	--print(cameraPos.x,cameraPos.y,cameraPos.z)
+	for i = 0,124 do
+		if mesher[i]:status() == 'suspended' and used_threads[i]==true then
+			--coroutine.pop(mesher[i],&curr)
+			--for i = 0,6 do
+			--	local pos=curr[i].pos
+			--	if curr[i].empty or (pos.x==0 and pos.y==0 and pos.z==0) then continue end
+			--	print(pos.x,pos.y,pos.z)
+			--	--UnloadModel(WORLD[{pos.x,pos.y,pos.z}].model)
+			--	WORLD[{pos.x,pos.y,pos.z}].model = curr[i].model
+			--end
+			----local pos=curr[6].pos
+			----print(pos.x,pos.y,pos.z)
+			----dummy:push(curr)
+			used_threads[i]=false
+		end
+	end
+	for i = -2,2 do
+		for k = -2,2 do
+			for j = -2,2 do
+				local pos=cameraPos+Vector3{i*chunkSize,k*chunkSize,j*chunkSize}
+				local t = getChunk(WORLD,math.floor(pos.x),math.floor(pos.y),math.floor(pos.z))
+				--camera.position.x+i*chunkSize,camera.position.y+k*chunkSize,camera.position.z+j*chunkSize)
+				--print(t.model.Mesh.triangleCount)
+				if (t.state==CHUNK_STATES.EMPTY) then
+					WORLD[{pos.x//chunkSize,pos.y//chunkSize,pos.z//chunkSize}]=genChunk((@pointer(Chunk))(MemAlloc(#Chunk)),pos.x//chunkSize,pos.y//chunkSize,pos.z//chunkSize)
+					--ReMesh(WORLD,pos.x//chunkSize,pos.y//chunkSize,pos.z//chunkSize)
+					--ReMesh(WORLD[{pos.x,pos.y,pos.z}])
+					--print(&WORLD,(@int32)(pos.x//chunkSize),(@int32)(pos.y//chunkSize),(@int32)(pos.z//chunkSize))
+					
+					for l = 0,124 do
+						--print(used_threads[l],mesher[l]:status(),l)
+						if used_threads[l] == false then
+							x,y,z = x//chunkSize,pos.y//chunkSize,pos.z//chunkSize
+							print(coroutine.resume(mesher[l]))--,&WORLD,pos.x//chunkSize,pos.y//chunkSize,pos.z//chunkSize))
+							used_threads[l] = true
+							break
+						end
+					end
+				end
+			end
+		end
+	end--]]
+	--OverWorld.worldLayer:draw()
+	--DrawModel(mapModel,Vector3{0,0,0},1.0,WHITE)
+end
+--local testMesh:mesh = {}
+
+--[[
+for i = 0,2 do
+	for k = 0,2 do
+		print(k*3+i)
+		if k*3+i<1 or k*3+i>7 then continue end 
+		OverWorld.worldLayer.class[k*3+i]=CHUNK_CLASS
+		OverWorld.worldLayer.branch[k*3+i] = genChunk((@ChunkPointer)(MemAlloc(#Chunk)),i-1,0,k)
+		--print(OverWorld.worldLayer.class[k*3+i])
+		--print(OverWorld.worldLayer.branch[k*3+i])
+	end
+end]]
+for i = -5,5 do
+	for k = -5,5 do
+		for j = 0,5 do
+		--print(i,k)
+			WORLD[{i,j,k}]=genChunk((@pointer(Chunk))(MemAlloc(#Chunk)),i,j,k)
+		end
+	end
+end
+
+for i = -5,5 do
+	for k = -5,5 do
+		for j = 0,5 do
+		  --print(i,k)
+			setMesh(WORLD,WORLD[{i,j,k}])
+		end
+	end
+end
+--mesher:resume()
+print(GetTime()-time_sample)
+
+local cameraPos:Vector3
+-- Main game loop
+while not WindowShouldClose() do        -- Detect window close button or ESC key
+	
+	-- Update
+	----------------------------------------------------------------------------------
+
+  local cameraMoveSpeed:float32 = 50*GetFrameTime();
+  if (IsKeyDown(KEY_W)) then CameraMoveForward(&camera, cameraMoveSpeed, true) end
+  if (IsKeyDown(KEY_A)) then CameraMoveRight(&camera, -cameraMoveSpeed, true) end
+  if (IsKeyDown(KEY_S)) then CameraMoveForward(&camera, -cameraMoveSpeed, true) end
+  if (IsKeyDown(KEY_D)) then CameraMoveRight(&camera, cameraMoveSpeed, true) end
+  if (IsKeyDown(KEY_SPACE)) then CameraMoveUp(&camera, cameraMoveSpeed) end
+  if (IsKeyDown(KEY_LEFT_CONTROL)) then CameraMoveUp(&camera, -cameraMoveSpeed) end
+
+  local mousePositionDelta:Vector2 = GetMouseDelta()
+  CameraYaw(&camera, -mousePositionDelta.x*0.003, false)
+  CameraPitch(&camera, -mousePositionDelta.y*0.003, true, false, false)
+
+	UpdateCamera(&camera, CameraMode.CAMERA_CUSTOM)
+	cameraPos = Vector3{ camera.position.x, camera.position.y, camera.position.z };
+	SetShaderValue(shader, shader.locs[SHADER_LOC_VECTOR_VIEW], &cameraPos, SHADER_UNIFORM_VEC3);
+	
+	if IsKeyDown(KeyboardKey.KEY_R) then camera.target = Vector3{ 0, 0, 0 } end
+
+	-- Draw
+	----------------------------------------------------------------------------------
+	drawing(function()
+		ClearBackground(BLUE)
+
+		Mode3D(camera, drawLoop)
+
+	end)
+end
+
+-- De-Initialization
+-------------------------------------------------------------------------------------
+CloseWindow()       -- Close window and OpenGL context
+-------------------------------------------------------------------------------------]==]

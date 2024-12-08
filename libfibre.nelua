@@ -1,0 +1,171 @@
+##[[
+cinclude 'libfibre/libfibre/cfibre.h'
+linklib '/home/nael/CubicWhale/libfibre/libfibre.a'
+]]
+require 'pthread'
+require 'socket'
+
+global pid_t:type = @uint64
+--global cfibre_cluster_t:type <cincomplete,nodecl> = @record{}
+
+global cfibre_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_sem_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_mutex_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_cond_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_rwlock_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_barrier_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_attr_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_mutexattr_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_condattr_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_rwlockattr_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_barrierattr_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_fastmutex_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_fastmutexattr_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_cluster_t:type <cincomplete,nodecl> = @pointer(record{})
+global cfibre_eventscope_t:type <cincomplete,nodecl> = @pointer(record{})
+
+global cfibre_key_t:type <cincomplete,nodecl> = @csize
+
+global cfibre_once_t:type <cincomplete,nodecl> = @cint
+
+global function cfibre_once(once_control:*cfibre_once_t,init_routine:function():void):cint <cimport,nodecl> end
+global function cfibre_cancel(x:cfibre_t):void <cimport,nodecl> end
+
+global function cfibre_init():void <cimport,nodecl> end
+global function cfibre_init_n(pollerCount:csize,workerCount:csize):void <cimport,nodecl> end
+global function cfibre_fork():pid_t <cimport,nodecl> end
+global function cfibre_cluster_create(cluster:*cfibre_cluster_t):cint <cimport,nodecl> end
+global function cfibre_cluster_destroy(cluster:*cfibre_cluster_t):cint <cimport,nodecl> end
+global function cfibre_add_worker():cint <cimport,nodecl> end
+global function cfibre_pause():cint <cimport,nodecl> end
+global function cfibre_resume():cint <cimport,nodecl> end
+
+global function cfibre_eventscope_clone(mainFunc:*function():void,args:pointer):cfibre_eventscope_t <cimport,nodecl> end
+global function cfibre_eventscope_self():cfibre_eventscope_t <cimport,nodecl> end
+
+global function cfibre_get_errno():cint <cimport,nodecl> end
+global function cfibre_set_errno(errno:cint):void <cimport,nodecl> end
+
+global function cfibre_attr_init(attr:*cfibre_attr_t):cint <cimport,nodecl> end
+global function cfibre_attr_destroy(attr:*cfibre_attr_t):cint <cimport,nodecl> end
+global function cfibre_attr_setcluster(attr:*cfibre_attr_t, cluster:cfibre_cluster_t):cint <cimport,nodecl> end
+global function cfibre_attr_getcluster(attr:*cfibre_attr_t <const>, cluster:*cfibre_cluster_t):cint <cimport,nodecl> end
+global function cfibre_attr_setstacksize(attr:*cfibre_attr_t, stacksize:csize):cint <cimport,nodecl> end
+global function cfibre_attr_getstacksize(attr:*cfibre_attr_t <const>, stacksize:*csize):cint <cimport,nodecl> end
+global function cfibre_attr_setguardsize(attr:*cfibre_attr_t, guardsize:csize):cint <cimport,nodecl> end
+global function cfibre_attr_getguardsize(attr:*cfibre_attr_t <const>, guardsize:*csize):cint <cimport,nodecl> end
+global function cfibre_attr_setpriority(attr:*cfibre_attr_t, priority:cint):cint <cimport,nodecl> end
+global function cfibre_attr_getpriority(attr:*cfibre_attr_t <const>, priority:*cint):cint <cimport,nodecl> end
+global function cfibre_attr_setaffinity(attr:*cfibre_attr_t, affinity:cint):cint <cimport,nodecl> end
+global function cfibre_attr_getaffinity(attr:*cfibre_attr_t <const>, affinity:*cint):cint <cimport,nodecl> end
+global function cfibre_attr_setdetachstate(attr:*cfibre_attr_t, detachstate:cint):cint <cimport,nodecl> end
+global function cfibre_attr_getdetachstate(attr:*cfibre_attr_t <const>, detachstate:*cint):cint <cimport,nodecl> end
+
+global function cfibre_create(thread:*cfibre_t, attr:*cfibre_attr_t <const>, start_routine:function(pointer):pointer, arg:pointer):cint <cimport,nodecl> end
+global function cfibre_join(thread:cfibre_t, retval:*pointer):cint <cimport,nodecl> end
+global function cfibre_detach(thread:cfibre_t):cint <cimport,nodecl> end
+global function cfibre_exit():void <cimport,nodecl> end
+global function cfibre_self():cfibre_t <cimport,nodecl> end
+global function cfibre_equal(thread1:cfibre_t, thread2:cfibre_t):cint <cimport,nodecl> end
+global function cfibre_yield():cint <cimport,nodecl> end
+global function cfibre_key_create(key:*cfibre_key_t, destructor:function():pointer):cint <cimport,nodecl> end
+global function cfibre_key_delete(key:cfibre_key_t):cint <cimport,nodecl> end
+global function cfibre_setspecific(key:cfibre_key_t, value:pointer <const>):cint <cimport,nodecl> end
+global function cfibre_getspecific(key:cfibre_key_t):pointer <cimport,nodecl> end
+global function cfibre_park():cint <cimport,nodecl> end
+global function cfibre_unpark(thread:cfibre_t):cint <cimport,nodecl> end
+global function cfibre_migrate(cluster:cfibre_cluster_t):cint <cimport,nodecl> end
+
+global function cfibre_sem_init(sem:*cfibre_sem_t, pshared:cint, value:cuint):cint <cimport,nodecl> end
+global function cfibre_sem_destroy(sem:*cfibre_sem_t):cint <cimport,nodecl> end
+global function cfibre_sem_wait(sem:*cfibre_sem_t):cint <cimport,nodecl> end
+global function cfibre_sem_trywait(sem:*cfibre_sem_t):cint <cimport,nodecl> end
+global function cfibre_sem_timedwait(sem:*cfibre_sem_t, abs_timeout:*timespec <const>):cint <cimport,nodecl> end
+global function cfibre_sem_post(sem:*cfibre_sem_t):cint <cimport,nodecl> end
+global function cfibre_sem_getvalue(sem:*cfibre_sem_t, sval:*cint):cint <cimport,nodecl> end
+
+
+global function cfibre_mutexattr_init(attr:*cfibre_mutexattr_t):cint <cimport,nodecl> end
+global function cfibre_mutexattr_destroy(attr:*cfibre_mutexattr_t):cint <cimport,nodecl> end
+global function cfibre_mutexattr_settype(attr:*cfibre_mutexattr_t, type:cint):cint <cimport,nodecl> end
+
+
+global function cfibre_mutex_init(mutex:*cfibre_mutex_t <restrict>, attr:*cfibre_mutexattr_t <restrict,const>):cint <cimport,nodecl> end
+global function cfibre_mutex_destroy(mutex:*cfibre_mutex_t):cint <cimport,nodecl> end
+global function cfibre_mutex_lock(mutex:*cfibre_mutex_t):cint <cimport,nodecl> end
+global function cfibre_mutex_trylock(mutex:*cfibre_mutex_t):cint <cimport,nodecl> end
+global function cfibre_mutex_timedlock(mutex:*cfibre_mutex_t <restrict>, abstime:*timespec <restrict,const>):cint <cimport,nodecl> end
+global function cfibre_mutex_unlock(mutex:*cfibre_mutex_t):cint <cimport,nodecl> end
+
+global function cfibre_condattr_init(attr:*cfibre_condattr_t):cint <cimport,nodecl> end
+global function cfibre_condattr_destroy(attr:*cfibre_condattr_t):cint <cimport,nodecl> end
+
+global function cfibre_cond_init(cond:*cfibre_cond_t <restrict>, attr:*cfibre_condattr_t <restrict,const>):cint <cimport,nodecl> end
+global function cfibre_cond_destroy(cond:*cfibre_cond_t):cint <cimport,nodecl> end
+global function cfibre_cond_wait(cond:*cfibre_cond_t <restrict>, mutex:*cfibre_mutex_t <restrict>):cint <cimport,nodecl> end
+global function cfibre_cond_timedwait(cond:*cfibre_cond_t <restrict>, mutex:*cfibre_mutex_t <restrict>, abstime:*timespec <restrict,const>):cint <cimport,nodecl> end
+global function cfibre_cond_signal(cond:*cfibre_cond_t):cint <cimport,nodecl> end
+global function cfibre_cond_broadcast(cond:*cfibre_cond_t):cint <cimport,nodecl> end
+
+global function cfibre_rwlock_init(rwlock:*cfibre_rwlock_t <restrict>, attr:*cfibre_rwlockattr_t <restrict,const>):cint <cimport,nodecl> end
+global function cfibre_rwlock_destroy(rwlock:*cfibre_rwlock_t):cint <cimport,nodecl> end
+global function cfibre_rwlock_rdlock(rwlock:*cfibre_rwlock_t):cint <cimport,nodecl> end
+global function cfibre_rwlock_tryrdlock(rwlock:*cfibre_rwlock_t):cint <cimport,nodecl> end
+global function cfibre_rwlock_timedrdlock(rwlock:*cfibre_rwlock_t <restrict>, abstime:*timespec <restrict,const>):cint <cimport,nodecl> end
+global function cfibre_rwlock_wrlock(rwlock:*cfibre_rwlock_t):cint <cimport,nodecl> end
+global function cfibre_rwlock_trywrlock(rwlock:*cfibre_rwlock_t):cint <cimport,nodecl> end
+global function cfibre_rwlock_timedwrlock(rwlock:*cfibre_rwlock_t <restrict>, abstime:*timespec <restrict,const>):cint <cimport,nodecl> end
+global function cfibre_rwlock_unlock(rwlock:*cfibre_rwlock_t):cint <cimport,nodecl> end
+
+global function cfibre_barrier_init(barrier:*cfibre_barrier_t <restrict>, attr:*cfibre_barrierattr_t <restrict,const>, count:cuint):cint <cimport,nodecl> end
+global function cfibre_barrier_destroy(barrier:*cfibre_barrier_t):cint <cimport,nodecl> end
+global function cfibre_barrier_wait(barrier:*cfibre_barrier_t):cint <cimport,nodecl> end
+
+global function cfibre_fastmutexattr_init(attr:*cfibre_fastmutexattr_t):cint <cimport,nodecl> end
+global function cfibre_fastmutexattr_destroy(attr:*cfibre_fastmutexattr_t):cint <cimport,nodecl> end
+global function cfibre_fastmutexattr_settype(attr:*cfibre_fastmutexattr_t, type:cint):cint <cimport,nodecl> end
+
+global function cfibre_fastmutex_init(mutex:*cfibre_fastmutex_t <restrict>, attr:*cfibre_fastmutexattr_t <restrict,const>):cint <cimport,nodecl> end
+global function cfibre_fastmutex_destroy(mutex:*cfibre_fastmutex_t):cint <cimport,nodecl> end
+global function cfibre_fastmutex_lock(mutex:*cfibre_fastmutex_t):cint <cimport,nodecl> end
+global function cfibre_fastmutex_trylock(mutex:*cfibre_fastmutex_t):cint <cimport,nodecl> end
+global function cfibre_fastmutex_unlock(mutex:*cfibre_fastmutex_t):cint <cimport,nodecl> end
+
+global function cfibre_fastcond_wait(cond:*cfibre_cond_t <restrict>, mutex:*cfibre_fastmutex_t <	restrict>):cint <cimport,nodecl> end
+global function cfibre_fastcond_timedwait(cond:*cfibre_cond_t <restrict>, mutex:*cfibre_fastmutex_t <restrict>, abstime:*timespec <restrict,const>):cint <cimport,nodecl> end
+
+global CFIBRE_MUTEX_RECURSIVE:cint  = 1
+global CFIBRE_MUTEX_ERRORCHECK:cint = 2
+global CFIBRE_MUTEX_DEFAULT:cint    = 0
+
+global socklen_t:type = @uint32
+global ssize_t:type = @cint
+global off_t:type = @int64
+global useconds_t:type = @uint32
+
+global function cfibre_socket(domain:cint, type:cint, protocol:cint):cint <cimport,nodecl> end
+global function cfibre_bind(socket:cint, address:*sockaddr <const>, address_len:*socklen_t):cint <cimport,nodecl> end
+global function cfibre_listen(socket:cint, backlog:cint):cint <cimport,nodecl> end
+global function cfibre_accept(socket:cint, address:*sockaddr <restrict>, address_len:*socklen_t <restrict>):cint <cimport,nodecl> end
+global function cfibre_accept4(socket:cint, address:*sockaddr <restrict>, address_len:*socklen_t <restrict>, flags:cint):cint <cimport,nodecl> end
+global function cfibre_connect(socket:cint, address:*sockaddr <const>, address_len:socklen_t):cint <cimport,nodecl> end
+global function cfibre_dup(fildes:cint):cint <cimport,nodecl> end
+global function cfibre_pipe(pipefd:[2]cint):cint <cimport,nodecl> end
+global function cfibre_pipe2(pipefd:[2]cint, flags:cint):cint <cimport,nodecl> end
+global function cfibre_close(fildes:cint):cint <cimport,nodecl> end
+global function cfibre_send(socket:cint, buffer:pointer <const>, length:csize, flags:cint):ssize_t <cimport,nodecl> end
+global function cfibre_sendto(socket:cint, message:pointer <const>, length:csize, flags:cint, dest_addr:*sockaddr <const>, dest_len:socklen_t):ssize_t <cimport,nodecl> end
+global function cfibre_sendmsg(socket:cint, message:*msghdr <const>, flags:cint):ssize_t <cimport,nodecl> end
+global function cfibre_write(fildes:cint, buf:pointer <const>, nbyte:csize):ssize_t <cimport,nodecl> end
+global function cfibre_writev(fildes:cint, iov:*iovec <const>, iovcnt:cint):ssize_t <cimport,nodecl> end
+global function cfibre_recv(socket:cint, buffer:pointer, length:csize, flags:cint):ssize_t <cimport,nodecl> end
+global function cfibre_recvfrom(socket:cint, buffer:pointer <restrict>, length:csize, flags:cint, address:*sockaddr <restrict>, address_len:*socklen_t <restrict>):ssize_t <cimport,nodecl> end
+global function cfibre_recvmsg(socket:cint, message:*msghdr, flags:cint):ssize_t <cimport,nodecl> end
+global function cfibre_read(fildes:cint, buf:pointer, nbyte:csize):ssize_t <cimport,nodecl> end
+global function cfibre_readv(fildes:cint, iov:*iovec <const>, iovcnt:cint):ssize_t <cimport,nodecl> end
+global function cfibre_sendfile(out_fd:cint, in_fd:cint, offset:*off_t, count:csize):ssize_t <cimport,nodecl> end
+
+global function cfibre_fcntl(fildes:cint, cmd:cint, flags:cint):cint <cimport,nodecl> end
+global function cfibre_nanosleep(rqtp:*timespec <const>, rmtp:*timespec):cint <cimport,nodecl> end
+global function cfibre_usleep(uses:useconds_t):cint <cimport,nodecl> end
+global function cfibre_sleep(secs:cuint):cint <cimport,nodecl> end

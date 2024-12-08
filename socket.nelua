@@ -1,0 +1,283 @@
+## cinclude '<sys/socket.h>'
+global iovec: type <cimport,nodecl,ctypedef> = @record{
+  iov_base: pointer,
+  iov_len: csize
+}
+global __fsid_t: type <cimport,nodecl> = @record{
+  __val: [2]cint
+}
+global __timer_t: type = @pointer
+global __caddr_t: type = @cstring
+global fsid_t: type = @__fsid_t
+global caddr_t: type = @cstring
+global timer_t: type = @pointer
+global function __bswap_16(bsx: uint16): uint16 <cimport,nodecl> end
+global function __bswap_32(bsx: uint32): uint32 <cimport,nodecl> end
+global function __bswap_64(bsx: uint64): uint64 <cimport,nodecl> end
+global function __uint16_identity(x: uint16): uint16 <cimport,nodecl> end
+global function __uint32_identity(x: uint32): uint32 <cimport,nodecl> end
+global function __uint64_identity(x: uint64): uint64 <cimport,nodecl> end
+global __sigset_t: type <cimport,nodecl> = @record{
+  __val: [16]culong
+}
+global sigset_t: type = @__sigset_t
+global timeval: type <cimport,nodecl,ctypedef> = @record{
+  tv_sec: ctime_t,
+  tv_usec: clong
+}
+global timespec: type <cimport,nodecl,ctypedef> = @record{
+  tv_sec: ctime_t,
+  tv_nsec: clong
+}
+global fd_set: type <cimport,nodecl> = @record{
+  fds_bits: [16]clong
+}
+global function select(nfds: cint, readfds: *fd_set, writefds: *fd_set, exceptfds: *fd_set, timeout: *timeval): cint <cimport,nodecl> end
+global function pselect(nfds: cint, readfds: *fd_set, writefds: *fd_set, exceptfds: *fd_set, timeout: *timespec, sigmask: *__sigset_t): cint <cimport,nodecl> end
+global __atomic_wide_counter: type <cimport,nodecl> = @union{
+  __value64: culonglong,
+  __value32: record{
+    __low: cuint,
+    __high: cuint
+  }
+}
+global __pthread_internal_list: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+__pthread_internal_list = @record{
+  __prev: *__pthread_internal_list,
+  __next: *__pthread_internal_list
+}
+global __pthread_list_t: type = @__pthread_internal_list
+global __pthread_internal_slist: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+__pthread_internal_slist = @record{
+  __next: *__pthread_internal_slist
+}
+global __pthread_slist_t: type = @__pthread_internal_slist
+global __pthread_mutex_s: type <cimport,nodecl,ctypedef> = @record{
+  __lock: cint,
+  __count: cuint,
+  __owner: cint,
+  __nusers: cuint,
+  __kind: cint,
+  __spins: cshort,
+  __elision: cshort,
+  __list: __pthread_list_t
+}
+global __pthread_rwlock_arch_t: type <cimport,nodecl,ctypedef> = @record{
+  __readers: cuint,
+  __writers: cuint,
+  __wrphase_futex: cuint,
+  __writers_futex: cuint,
+  __pad3: cuint,
+  __pad4: cuint,
+  __cur_writer: cint,
+  __shared: cint,
+  __rwelision: cschar,
+  __pad1: [7]cuchar,
+  __pad2: culong,
+  __flags: cuint
+}
+global __pthread_cond_s: type <cimport,nodecl,ctypedef> = @record{
+  __wseq: __atomic_wide_counter,
+  __g1_start: __atomic_wide_counter,
+  __g_refs: [2]cuint,
+  __g_size: [2]cuint,
+  __g1_orig_size: cuint,
+  __wrefs: cuint,
+  __g_signals: [2]cuint
+}
+global __once_flag: type <cimport,nodecl> = @record{
+  __data: cint
+}
+global pthread_mutexattr_t: type <cimport,nodecl> = @union{
+  __size: [4]cchar,
+  __align: cint
+}
+global pthread_condattr_t: type <cimport,nodecl> = @union{
+  __size: [4]cchar,
+  __align: cint
+}
+global pthread_attr_t: type <cimport,nodecl> = @union{
+  __size: [56]cchar,
+  __align: clong
+}
+global pthread_mutex_t: type <cimport,nodecl> = @union{
+  __data: __pthread_mutex_s,
+  __size: [40]cchar,
+  __align: clong
+}
+global pthread_cond_t: type <cimport,nodecl> = @union{
+  __data: __pthread_cond_s,
+  __size: [48]cchar,
+  __align: clonglong
+}
+global pthread_rwlock_t: type <cimport,nodecl> = @union{
+  __data: __pthread_rwlock_arch_t,
+  __size: [56]cchar,
+  __align: clong
+}
+global pthread_rwlockattr_t: type <cimport,nodecl> = @union{
+  __size: [8]cchar,
+  __align: clong
+}
+global pthread_barrier_t: type <cimport,nodecl> = @union{
+  __size: [32]cchar,
+  __align: clong
+}
+global pthread_barrierattr_t: type <cimport,nodecl> = @union{
+  __size: [4]cchar,
+  __align: cint
+}
+global __socket_type: type <cimport,nodecl,using,ctypedef> = @enum(cuint){
+  SOCK_STREAM=1,
+  SOCK_DGRAM=2,
+  SOCK_RAW=3,
+  SOCK_RDM=4,
+  SOCK_SEQPACKET=5,
+  SOCK_DCCP=6,
+  SOCK_PACKET=10,
+  SOCK_CLOEXEC=02000000,
+  SOCK_NONBLOC=00004000,
+}
+global sockaddr: type <cimport,nodecl,ctypedef> = @record{
+  sa_family: cushort,
+  sa_data: [14]cchar
+}
+global sockaddr_storage: type <cimport,nodecl,ctypedef> = @record{
+  ss_family: cushort,
+  __ss_padding: [118]cchar,
+  __ss_align: culong
+}
+global MSG_OOB: cuint <comptime> = 0x01
+global MSG_PEEK: cuint <comptime> = 0x02
+global MSG_DONTROUTE: cuint <comptime> = 0x04
+global MSG_TRYHARD: cuint <comptime> = MSG_DONTROUTE
+global MSG_CTRUNC: cuint <comptime> = 0x08
+global MSG_PROXY: cuint <comptime> = 0x10
+global MSG_TRUNC: cuint <comptime> = 0x20
+global MSG_DONTWAIT: cuint <comptime> = 0x40
+global MSG_EOR: cuint <comptime> = 0x80
+global MSG_WAITALL: cuint <comptime> = 0x100
+global MSG_FIN: cuint <comptime> = 0x200
+global MSG_SYN: cuint <comptime> = 0x400
+global MSG_CONFIRM: cuint <comptime> = 0x800
+global MSG_RST: cuint <comptime> = 0x1000
+global MSG_ERRQUEUE: cuint <comptime> = 0x2000
+global MSG_NOSIGNAL: cuint <comptime> = 0x4000
+global MSG_MORE: cuint <comptime> = 0x8000
+global MSG_WAITFORONE: cuint <comptime> = 0x10000
+global MSG_BATCH: cuint <comptime> = 0x40000
+global MSG_ZEROCOPY: cuint <comptime> = 0x4000000
+global MSG_FASTOPEN: cuint <comptime> = 0x20000000
+global MSG_CMSG_CLOEXEC: cuint <comptime> = 0x40000000
+global msghdr: type <cimport,nodecl,ctypedef> = @record{
+  msg_name: pointer,
+  msg_namelen: cuint,
+  msg_iov: *iovec,
+  msg_iovlen: csize,
+  msg_control: pointer,
+  msg_controllen: csize,
+  msg_flags: cint
+}
+global cmsghdr: type <cimport,nodecl,ctypedef> = @record{
+  cmsg_len: csize,
+  cmsg_level: cint,
+  cmsg_type: cint,
+  __cmsg_data: [0]cuchar
+}
+global function __cmsg_nxthdr(mhdr: *msghdr, cmsg: *cmsghdr): *cmsghdr <cimport,nodecl> end
+global SCM_RIGHTS: cuint <comptime> = 0x01
+global SCM_CREDENTIALS: cuint <comptime> = 0x02
+global SCM_SECURITY: cuint <comptime> = 0x03
+global SCM_PIDFD: cuint <comptime> = 0x04
+global ucred: type <cimport,nodecl,ctypedef> = @record{
+  pid: cint,
+  uid: cuint,
+  gid: cuint
+}
+global __kernel_fd_set: type <cimport,nodecl> = @record{
+  fds_bits: [16]culong
+}
+global __kernel_sighandler_t: type <cimport,nodecl> = @function(cint): void
+global __kernel_fsid_t: type <cimport,nodecl> = @record{
+  val: [2]cint
+}
+global __kernel_caddr_t: type = @cstring
+global linger: type <cimport,nodecl,ctypedef> = @record{
+  l_onoff: cint,
+  l_linger: cint
+}
+global osockaddr: type <cimport,nodecl,ctypedef> = @record{
+  sa_family: cushort,
+  sa_data: [14]cuchar
+}
+global SHUT_RD: cuint <comptime> = 0
+global SHUT_WR: cuint <comptime> = 0
+global SHUT_RDWR: cuint <comptime> = 0
+global sockaddr_at: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_ax25: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_dl: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_eon: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_in: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_in6: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_inarp: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_ipx: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_iso: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_ns: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_un: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global sockaddr_x25: type <cimport,nodecl,forwarddecl,ctypedef> = @record{}
+global __SOCKADDR_ARG: type <cimport,nodecl> = @union{
+  __sockaddr__: *sockaddr,
+  __sockaddr_at__: *sockaddr_at,
+  __sockaddr_ax25__: *sockaddr_ax25,
+  __sockaddr_dl__: *sockaddr_dl,
+  __sockaddr_eon__: *sockaddr_eon,
+  __sockaddr_in__: *sockaddr_in,
+  __sockaddr_in6__: *sockaddr_in6,
+  __sockaddr_inarp__: *sockaddr_inarp,
+  __sockaddr_ipx__: *sockaddr_ipx,
+  __sockaddr_iso__: *sockaddr_iso,
+  __sockaddr_ns__: *sockaddr_ns,
+  __sockaddr_un__: *sockaddr_un,
+  __sockaddr_x25__: *sockaddr_x25
+}
+global __CONST_SOCKADDR_ARG: type <cimport,nodecl> = @union{
+  __sockaddr__: *sockaddr,
+  __sockaddr_at__: *sockaddr_at,
+  __sockaddr_ax25__: *sockaddr_ax25,
+  __sockaddr_dl__: *sockaddr_dl,
+  __sockaddr_eon__: *sockaddr_eon,
+  __sockaddr_in__: *sockaddr_in,
+  __sockaddr_in6__: *sockaddr_in6,
+  __sockaddr_inarp__: *sockaddr_inarp,
+  __sockaddr_ipx__: *sockaddr_ipx,
+  __sockaddr_iso__: *sockaddr_iso,
+  __sockaddr_ns__: *sockaddr_ns,
+  __sockaddr_un__: *sockaddr_un,
+  __sockaddr_x25__: *sockaddr_x25
+}
+global mmsghdr: type <cimport,nodecl,ctypedef> = @record{
+  msg_hdr: msghdr,
+  msg_len: cuint
+}
+global function socket(domain: cint, type: cint, protocol: cint): cint <cimport,nodecl> end
+global function socketpair(domain: cint, type: cint, protocol: cint, fds: *cint): cint <cimport,nodecl> end
+global function bind(fd: cint, addr: __CONST_SOCKADDR_ARG, len: cuint): cint <cimport,nodecl> end
+global function getsockname(fd: cint, addr: __SOCKADDR_ARG, len: *cuint): cint <cimport,nodecl> end
+global function connect(fd: cint, addr: __CONST_SOCKADDR_ARG, len: cuint): cint <cimport,nodecl> end
+global function getpeername(fd: cint, addr: __SOCKADDR_ARG, len: *cuint): cint <cimport,nodecl> end
+global function send(fd: cint, buf: pointer, n: csize, flags: cint): clong <cimport,nodecl> end
+global function recv(fd: cint, buf: pointer, n: csize, flags: cint): clong <cimport,nodecl> end
+global function sendto(fd: cint, buf: pointer, n: csize, flags: cint, addr: __CONST_SOCKADDR_ARG, addr_len: cuint): clong <cimport,nodecl> end
+global function recvfrom(fd: cint, buf: pointer, n: csize, flags: cint, addr: __SOCKADDR_ARG, addr_len: *cuint): clong <cimport,nodecl> end
+global function sendmsg(fd: cint, message: *msghdr, flags: cint): clong <cimport,nodecl> end
+global function sendmmsg(fd: cint, vmessages: *mmsghdr, vlen: cuint, flags: cint): cint <cimport,nodecl> end
+global function recvmsg(fd: cint, message: *msghdr, flags: cint): clong <cimport,nodecl> end
+global function recvmmsg(fd: cint, vmessages: *mmsghdr, vlen: cuint, flags: cint, tmo: *timespec): cint <cimport,nodecl> end
+global function getsockopt(fd: cint, level: cint, optname: cint, optval: pointer, optlen: *cuint): cint <cimport,nodecl> end
+global function setsockopt(fd: cint, level: cint, optname: cint, optval: pointer, optlen: cuint): cint <cimport,nodecl> end
+global function listen(fd: cint, n: cint): cint <cimport,nodecl> end
+global function accept(fd: cint, addr: __SOCKADDR_ARG, addr_len: *cuint): cint <cimport,nodecl> end
+global function accept4(fd: cint, addr: __SOCKADDR_ARG, addr_len: *cuint, flags: cint): cint <cimport,nodecl> end
+global function shutdown(fd: cint, how: cint): cint <cimport,nodecl> end
+global function sockatmark(fd: cint): cint <cimport,nodecl> end
+global function isfdtype(fd: cint, fdtype: cint): cint <cimport,nodecl> end

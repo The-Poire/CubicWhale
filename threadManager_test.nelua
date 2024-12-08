@@ -1,0 +1,25 @@
+
+--Coroutine test program
+## cdefine 'RLIGHTS_IMPLEMENTATION'
+require "raylib/raylib"
+require "ThreadManager"
+require "string"
+
+global function tostring(n:int64)
+	print(n)
+	return ("%d"):format(n)
+end
+local argType:type = @record{w:int32,x:int32,y:int32,z:int32}
+local mesher:[125]int64
+for k=0,124 do
+	mesher[k] = tm_newThread(function(a:uint64,b:uint64)
+		print(a,b)
+	end,
+	function(arg:pointer)
+		print(arg)
+	end,1)
+end
+
+while true do
+	if not tm_updateThreads() then break end
+end
