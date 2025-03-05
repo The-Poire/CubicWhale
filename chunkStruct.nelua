@@ -1,0 +1,402 @@
+##pragmas.nogc=true
+require 'memory'
+require 'hash'
+require 'span'
+require 'C'
+require 'C.threads'
+--require 'allocators.gc'
+require 'baseObjects'
+
+--local alloc= #[DefaultAllocator]#
+  require 'allocators.default'
+
+  local Allocator: type = #[DefaultAllocator]#
+  local alloc:Allocator
+
+global CHUNK_SIZE <comptime> = 16
+local CHUNK_SIZE_MAXBLOCKS <comptime> = CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE
+
+##__CHUNK_T__=true
+
+global CHUNK_STATES = @enum(byte){
+	NEW=0,
+	EMPTY=2,
+	GENERATED=4,
+	MODEL_DONE=8,
+}
+
+global chunk_t:type = @record{
+	blockArray:span(byte),
+		--blockArray:[CHUNK_SIZE_MAXBLOCKS]byte,
+	blockDictionary:span(uint32),
+	blockAmount:uint64,
+	pos:Cube,
+	state:CHUNK_STATES,
+	model:Model,
+	size:byte,
+	blockMutex:C.mtx_t,
+	modelMutex:C.mtx_t,
+	parent_node:*octree_t
+--[[
+	##if CHUNK_SIZE_MAXBLOCKS.value<256 then
+		blockAmount:byte,
+	##elseif CHUNK_SIZE_MAXBLOCKS.value<65536 then
+		blockAmount:uint16,
+	##elseif CHUNK_SIZE_MAXBLOCKS.value<4294967296 then
+		blockAmount:uint32,
+	##else
+		blockAmount:uint64,
+	##end]]
+}
+
+function chunk_t.__atindex(chk:*chunk_t,key:integer)
+	return chk.blockArray[key]
+end
+
+function chunk_t:draw()
+	--print(self.pos[0],self.pos[1],self.pos[2])
+	--DrawCube(Vector3{self.pos.x,self.pos.y,self.pos.z},CHUNK_SIZE,CHUNK_SIZE,CHUNK_SIZE,GREEN)--(@Color){self.pos[0],self.pos[1],self.pos[2],255})
+	DrawModel(self.model,Vector3{self.pos[0],self.pos[1],self.pos[2]},1.0,WHITE)
+end
+
+local function has(r:uint32,obj:span(uint32)):int16
+	for i = 0,#obj-1 do
+		if obj[i]==r then
+			return i
+		end
+	end
+	return -1
+end
+
+function chunk_t:setBlock(blockId:uint32,x:uint64,y:uint64,z:uint64,relative:facultative(boolean)):boolean
+
+	local offset:uint64
+	##if relative.type.is_niltype or not relative.value then --if not relative then
+		offset = x*CHUNK_SIZE*CHUNK_SIZE+y*CHUNK_SIZE+z
+	##else
+		if (@Cube){x=x,y=y,z=z,s=1}+self.pos then
+			offset = C.floor(self.pos[0]-x)*CHUNK_SIZE*CHUNK_SIZE +C.floor(self.pos[1]-y)*CHUNK_SIZE +C.floor(self.pos[2]-z)
+		else
+			return false
+		end
+	##end
+
+	local dicItem = has(blockId,self.blockDictionary)
+	if dicItem == -1 then
+
+		if #self.blockDictionary==0 and self.size==0 then
+			self.blockArray=alloc:spanalloc(@byte,CHUNK_SIZE_MAXBLOCKS)
+			self.size=1
+		elseif #self.blockDictionary==256 and self.size==1 then
+			print("REALLOCATED CHUNK",self)
+			local tmp:span(byte) = alloc:spanalloc(@byte,2*CHUNK_SIZE_MAXBLOCKS)
+			for i = 0,#self.blockArray-1 do
+				tmp[i*2+1]=self.blockArray[i]
+			end
+			alloc:spandealloc(self.blockArray)
+			self.blockArray=tmp
+			--self.blockArray=alloc:spanrealloc(self.blockArray,CHUNK_SIZE_MAXBLOCKS*2)
+			self.size=2
+		end
+
+		self.blockDictionary=alloc:xspanrealloc(self.blockDictionary,#self.blockDictionary+1)
+		self.blockDictionary[#self.blockDictionary-1]=blockId
+
+		if self.size==2 then
+			--print(#self.blockDictionary-1,(@byte)(#self.blockDictionary-1),(#self.blockDictionary-1>>8),(#self.blockDictionary-1))
+			self.blockArray[offset*2]   = (@byte)(#self.blockDictionary-1>>8)
+			self.blockArray[offset*2+1] = (@byte)(#self.blockDictionary-1)
+			--print(self.blockDictionary[#self.blockDictionary-1],blockId,256*(@uint16)(self.blockArray[offset*2]) + (@uint16)(self.blockArray[offset*2+1]))
+		else
+			self.blockArray[offset] = (@byte)(#self.blockDictionary-1)
+		end
+		return true
+	else
+		--self.blockArray[offset] = dicItem
+		if self.size==2 then
+			--print(#self.blockDictionary-1,(@byte)(dicItem),(dicItem>>8),(@byte)(dicItem))
+			self.blockArray[offset*2]   = (@byte)(dicItem>>8)
+			self.blockArray[offset*2+1] = (@byte)(dicItem)
+			--print(self.blockDictionary[dicItem],self.blockDictionary[dicItem],dicItem,256*(@uint16)(self.blockArray[offset*2]) + (@uint16)(self.blockArray[offset*2+1]))
+		else
+			self.blockArray[offset] = (@byte)(dicItem)
+		end
+	end
+	return true
+end
+
+function chunk_t:getBlock(x:uint64,y:uint64,z:uint64,relative:facultative(boolean)):uint32
+	if unlikely(self.blockDictionary.size<=0) then return 0 end
+	local offset:uint64
+
+	##if relative.type.is_niltype or not relative.value then
+		offset = x*CHUNK_SIZE*CHUNK_SIZE+y*CHUNK_SIZE+z
+	##else
+		if (@Cube){x=x,y=y,z=z,s=1}+self.pos then
+			offset = (self.pos[0]-x)*CHUNK_SIZE*CHUNK_SIZE +(self.pos[1]-y)*CHUNK_SIZE +(self.pos[2]-z)
+		else
+			return 0
+		end
+	##end
+
+	switch self.size do
+	case 1 then
+		return self.blockDictionary[self.blockArray[offset]]
+	case 2 then
+		return self.blockDictionary[256*(@uint16)(self.blockArray[offset*2]) + (@uint16)(self.blockArray[offset*2+1])]
+	else
+		return 0
+	end
+end
+
+--[===[]===]
+local texture = LoadTexture("assets/TexturePack.png")
+local tileSize = 16
+local textureUV_Size:Vector2 = {tileSize/texture.width,tileSize/texture.height}
+local TEXTURE_UVS_INDEX = @enum{
+	GRASS = 0,
+	DIRT = 2,
+	GRASSDIRT = 1,
+}
+print(textureUV_Size.x,textureUV_Size.y,2/textureUV_Size.x,2/textureUV_Size.y)
+local TEXTURE_UVS:[25]Vector2 = {
+	Vector2{1*textureUV_Size.x,1*textureUV_Size.y},
+	Vector2{2*textureUV_Size.x,1*textureUV_Size.y},
+	Vector2{3*textureUV_Size.x,1*textureUV_Size.y},
+}
+local rev:[6][2]boolean ={
+    	{true,true},
+    	{false,false},
+    	{false,true},
+    	{false,false},
+    	{true,true},
+    	{true,false},
+    }
+local function addFace(mesh:*Mesh,dataindex:*integer,x:int32,y:int32,z:int32, mx:byte,my:byte,mz:byte, uv:Vector2, c:float32,reverse:boolean,reverse2:boolean)
+	local u,v = uv.x,uv.y
+	local i:byte = 0
+	local g:[6]byte = {1,2,3,4,5,6}--{}--,6,5,4}
+    		local g2:[6]byte={3,2,1,6,5,4}
+	if reverse then g={3,2,1,6,5,4}	end
+	local primary:boolean
+	local secondary:boolean
+  for k=1,6 do
+  	i = g[k-1]
+    primary = i%2 == 1
+    secondary= i > 2 and i < 6
+    --print(x+(mx == 1 and primary and 1 or 0) + (mx == 2 and secondary and 1 or 0),y+(my == 1 and primary and 1 or 0) + (my == 2 and secondary and 1 or 0),z+(mz == 1 and primary and 1 or 0) + (mz == 2 and secondary and 1 or 0))
+    mesh.vertices[ $dataindex*3  ] = x + (mx == 1 and primary and 1 or 0) + (mx == 2 and secondary and 1 or 0) --test[i-1][0].x
+    mesh.vertices[ $dataindex*3+1] = y + (my == 1 and primary and 1 or 0) + (my == 2 and secondary and 1 or 0) --test[i-1][1].y
+    mesh.vertices[ $dataindex*3+2] = z + (mz == 1 and primary and 1 or 0) + (mz == 2 and secondary and 1 or 0) --test[i-1][2].z
+
+    if reverse2 then
+    	if reverse then 
+    		primary =  rev[k-1][0]
+    		secondary= rev[k-1][1]
+    	else
+    		primary =  rev[g2[k-1]-1][0]
+    		secondary= rev[g2[k-1]-1][1]
+    	end
+  	end
+    mesh.texcoords[$dataindex*2  ] = u - textureUV_Size.x*(primary and 1 or 0)
+    mesh.texcoords[$dataindex*2+1] = v - textureUV_Size.y*(secondary and 1 or 0)
+    --mesh.colors[$dataindex*4]  = c*255
+    $dataindex = $dataindex+1
+  end
+end
+
+function chunk_t:genMesh(world:*octree_t)
+	local mapMesh:Mesh = {0}
+
+	--To quickly strip out invisible s
+	if self.blockAmount==0 then UploadMesh(&mapMesh,false); return mapMesh end
+	if self.blockAmount==CHUNK_SIZE_MAXBLOCKS then
+		if (@*chunk_t)(world:getNode(self.pos[0]+CHUNK_SIZE,self.pos[1],self.pos[2])).blockAmount ==CHUNK_SIZE_MAXBLOCKS and
+		   (@*chunk_t)(world:getNode(self.pos[0]-CHUNK_SIZE,self.pos[1],self.pos[2])).blockAmount ==CHUNK_SIZE_MAXBLOCKS and
+		   (@*chunk_t)(world:getNode(self.pos[0],self.pos[1]+CHUNK_SIZE,self.pos[2])).blockAmount ==CHUNK_SIZE_MAXBLOCKS and
+		   (@*chunk_t)(world:getNode(self.pos[0],self.pos[1]-CHUNK_SIZE,self.pos[2])).blockAmount ==CHUNK_SIZE_MAXBLOCKS and
+		   (@*chunk_t)(world:getNode(self.pos[0],self.pos[1],self.pos[2]+CHUNK_SIZE)).blockAmount ==CHUNK_SIZE_MAXBLOCKS and
+		   (@*chunk_t)(world:getNode(self.pos[0],self.pos[1],self.pos[2]-CHUNK_SIZE)).blockAmount ==CHUNK_SIZE_MAXBLOCKS then UploadMesh(&mapMesh,false); return mapMesh end
+	end
+--print()
+	local facecount = 0
+	for x:int32=0, CHUNK_SIZE-1 do
+	  for y:int32=0, CHUNK_SIZE-1 do
+	    for z:int32=0, CHUNK_SIZE-1 do
+	      if world:getBlock(self, x,y,z) ~= 0 then
+	      	--print(x,y,z,getBlock(world,self, x,y,z))
+	        if world:getBlock(self, x+1,y,z) == 0 then facecount = facecount + 1 end
+  	      if world:getBlock(self, x-1,y,z) == 0 then facecount = facecount + 1 end
+    	    if world:getBlock(self, x,y+1,z) == 0 then facecount = facecount + 1 end
+      	  if world:getBlock(self, x,y-1,z) == 0 then facecount = facecount + 1 end
+          if world:getBlock(self, x,y,z+1) == 0 then facecount = facecount + 1 end
+          if world:getBlock(self, x,y,z-1) == 0 then facecount = facecount + 1 end
+        end
+  	  end
+  	end
+	end
+--print(facecount)
+	local count = facecount*6
+	if count > 0 then
+    local dataindex:int64 = 0
+    
+		AllocateMeshData(&mapMesh,facecount*2)
+    local emptyUV = Vector2{0,0}
+    for z=0, CHUNK_SIZE-1 do
+      for x=0, CHUNK_SIZE-1 do
+        for y=0, CHUNK_SIZE-1 do
+          local b0,b1,b2,b3,b4,b5,b6 = getBlock(world,self, x,y,z),getBlock(world,self, x-1,y,z),getBlock(world,self, x+1,y,z),getBlock(world,self, x,y-1,z),getBlock(world,self, x,y+1,z),getBlock(world,self, x,y,z-1),getBlock(world,self, x,y,z+1)
+          if b0 ~= 0 then
+            if b1 == 0 then addFace(&mapMesh,&dataindex,x,y,z,   0,1,2, TEXTURE_UVS[TEXTURE_UVS_INDEX.GRASSDIRT],1,false,true) end
+            if b2 == 0 then addFace(&mapMesh,&dataindex,x+1,y,z, 0,1,2, TEXTURE_UVS[TEXTURE_UVS_INDEX.GRASSDIRT],1,true,true) end
+            if b3 == 0 then addFace(&mapMesh,&dataindex,x,y,z,   1,0,2, TEXTURE_UVS[TEXTURE_UVS_INDEX.DIRT],1,true) end
+            if b4 == 0 then addFace(&mapMesh,&dataindex,x,y+1,z, 1,0,2, TEXTURE_UVS[TEXTURE_UVS_INDEX.GRASS],1,false) end
+            if b5 == 0 then addFace(&mapMesh,&dataindex,x,y,z,   1,2,0, TEXTURE_UVS[TEXTURE_UVS_INDEX.GRASSDIRT],1,false) end
+            if b6 == 0 then addFace(&mapMesh,&dataindex,x,y,z+1, 1,2,0, TEXTURE_UVS[TEXTURE_UVS_INDEX.GRASSDIRT],1,true) end
+          end
+        end
+      end
+    end
+	end
+
+	--[[for i = 1,CHUNK_SIZE do
+		for k = 1,CHUNK_SIZE do
+			for j = 1,CHUNK_SIZE do
+				if getBlock(world,&map,i-1,k-1,j-1) == 1 then
+					cubePosition = Vector3{i-1,k-1,j-1}
+					--(cubePosition, 1, 1, 1, GREEN)
+				end
+			end
+		end
+	end]]
+	UploadMesh(&mapMesh,false)
+	return mapMesh
+end
+
+global function genChunk(chunk:*Chunk, x:int32,y:int32,z:int32)
+	--print(x,y,z)
+	if self.state>CHUNK_STATES.NEW then return end
+	self.state=CHUNK_STATES.GENERATED
+	--self.class = &CHUNK_CLASS
+	self.pos = Cube{CHUNK_SIZE*x,CHUNK_SIZE*y,CHUNK_SIZE*z,CHUNK_SIZE}
+	local tempImg = GenImagePerlinNoise(CHUNK_SIZE,CHUNK_SIZE,self.pos[0],self.pos[2],CHUNK_SIZE/512)
+	--local tempImg = GenImagePerlinNoise(CHUNK_SIZE,CHUNK_SIZE,0,0,1/2)
+	--local size:cint = (CHUNK_SIZE*CHUNK_SIZE*#int32)
+	--local next = ExportImageAsCode(tempImg,"bmp.c")
+	--UnloadImage(testImg)
+	local blockAmount:uint32 = 0
+	for i = 1,CHUNK_SIZE do
+		for k = 1,CHUNK_SIZE do
+			for j = 1,CHUNK_SIZE do
+				if GetImageColor(tempImg,(i-1),j-1).r>k+y*CHUNK_SIZE then
+				--if j>CHUNK_SIZE//2 or j == 1 then
+					setBlock(self,i-1,k-1,j-1,1)
+					blockAmount=blockAmount+1
+				else
+					setBlock(self,i-1,k-1,j-1,0)
+				end
+			end
+		end
+	end
+	self.blockAmount = blockAmount
+		--local heightMap = LoadTextureFromImage(tempImg)
+		--UnloadImage(tempImg)
+	--general_allocator:dealloc(&testImg)
+	--UnloadImage(testImg)
+	
+	--print(GetTime()-time_sample)
+	return self
+end--]===]
+
+
+function chunk_t:destroy()
+	alloc:spandealloc(self.blockArray)
+	alloc:spandealloc(self.blockDictionary)
+end
+
+function chunk_t:__close()
+	self:destroy()
+end
+
+global function newChunk(x:int64,y:int64,z:int64,p:facultative(*chunk_t),root:facultative(pointer))
+	--print(x,y,z)
+	local rtn:chunk_t
+	rtn.pos = (@Cube){x=x,y=y,z=z,s=CHUNK_SIZE}
+	assert(C.mtx_init(&rtn.blockMutex, C.mtx_plain) == C.thrd_success)
+	assert(C.mtx_init(&rtn.modelMutex, C.mtx_plain) == C.thrd_success)
+	##if not p.type.is_niltype then
+		$p=rtn
+		## if not root.type.is_niltype then
+			p.parent_node = (@*octree_t)(root)
+		##end
+		--return &rtn
+	##else
+		return rtn
+	##end
+end
+
+##if DEBUG then
+do
+	print("TEST 1 :")
+	local a:chunk_t <close> = newChunk(0,0,0)
+	a:setBlock(1,0,0,0)
+	print(a:getBlock(0,0,0))
+	print("TEST 1 - OK")
+end require "math" do
+	print("TEST 2 :")
+	local a:chunk_t <close> = newChunk(0,0,0)
+	local b:uint64
+	local v:uint32
+	local o:uint32
+	for i = 0,CHUNK_SIZE-1 do
+		for k = 0,CHUNK_SIZE-1 do
+			for j = 0,CHUNK_SIZE-1 do
+				v=math.random(0,255)
+				a:setBlock(v,i,k,j)
+				o=a:getBlock(i,k,j)
+				print("Pass No",b,"block at :",i,k,j," : ",o,v)
+				assert(o==v)
+				b=b+1
+			end
+		end
+	end
+	print("Total passes :",b)
+	assert(b==CHUNK_SIZE_MAXBLOCKS)
+	print("TEST 2 - OK")
+end do
+	print("TEST 3 :")
+	local a:chunk_t <close> = newChunk(0,0,0)
+	local b:uint64
+	local v:uint32
+	local o:uint32
+	for offset = 0,CHUNK_SIZE_MAXBLOCKS-1,CHUNK_SIZE do
+		for i = 0,CHUNK_SIZE-1 do
+			for k = 0,CHUNK_SIZE-1 do
+				for j = 0,CHUNK_SIZE-1 do
+					v=math.random(0+offset,255+offset)
+					a:setBlock(v,i,k,j)
+					o=a:getBlock(i,k,j)
+					--print("Pass No",b,"block at :",i,k,j," : ",o,v)
+					assert(o==v)
+					b=b+1
+				end
+			end
+		end
+		print('done offset :',offset)
+	end
+	print("Total passes :",b)
+	assert(b==CHUNK_SIZE_MAXBLOCKS*CHUNK_SIZE_MAXBLOCKS/CHUNK_SIZE)
+	print("TEST 3 - OK")
+end do
+	print("TEST 4 :")
+	local node:[8]pointer
+	do
+		local chk:pointer = (alloc:alloc(#@chunk_t))
+		newChunk(16,16,16,(@*chunk_t)(chk))
+		node[0]=chk
+	end
+	print(node[0],(@*chunk_t)(node[0]),(@*chunk_t)(node[0]).pos)
+	print("TEST 4 - OK")
+
+end
+##end

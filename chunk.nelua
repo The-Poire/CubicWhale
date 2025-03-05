@@ -46,9 +46,9 @@ d_Empty_Chunk.state = CHUNK_STATES.EMPTY
 print(#@Chunk)
 
 global function getChunk(world:*t_worldMap,x:int32,y:int32,z:int32):*Chunk
-	--assert(C.mtx_lock(&mutex) == C.thrd_success)
+	assert(C.mtx_lock(&mutex) == C.thrd_success)
 	local chk=world:peek({math.floor(x/chunkSize),math.floor(y/chunkSize),math.floor(z/chunkSize)})
-	--assert(C.mtx_unlock(&mutex) == C.thrd_success)
+	assert(C.mtx_unlock(&mutex) == C.thrd_success)
 		if chk~=nilptr and $chk then
 			return $chk
 		end return &d_Empty_Chunk
@@ -293,10 +293,10 @@ global function ReMesh(world:*t_worldMap,x:int32,y:int32,z:int32)
 		
 	end
 
-	assert(C.mtx_lock(&mutex) == C.thrd_success)
+	--assert(C.mtx_lock(&mutex) == C.thrd_success)
 	chunk = getChunk(world,x,y,z)
 	if (chunk.state>CHUNK_STATES.EMPTY) then setMesh(world,chunk) end
-	assert(C.mtx_unlock(&mutex) == C.thrd_success)
+	--assert(C.mtx_unlock(&mutex) == C.thrd_success)
 	--print(GetTime()-time_sample)
 	return true
 end

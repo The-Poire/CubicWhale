@@ -114,7 +114,9 @@ function Cube:toVec()
 end
 require "thread"
 global mutex: C.mtx_t
+global mutex2: C.mtx_t
 assert(C.mtx_init(&mutex, C.mtx_plain) == C.thrd_success)
+assert(C.mtx_init(&mutex2, C.mtx_recursive) == C.thrd_success)
 --require "ThreadManager"
 require 'chunk'
 
@@ -763,15 +765,18 @@ local function drawLoop()
 
 	--tm_updateThreads()
 	_deferChunkCreation_update()
-	for k,v in pairs(WORLD) do
+	for k  = -5,5 do for j = -5,5 do for i = -5,5 do --in pairs(WORLD) do
 		--if C.mtx_trylock(&mutex) ~= C.thrd_busy then
-			v:draw()
-		--	assert(C.mtx_unlock(&mutex) == C.thrd_success)
+			assert(C.mtx_lock(&mutex2) == C.thrd_success)
+			local chk:*Chunk = WORLD[{k,j,i}]
+			if chk~=nilptr then chk:draw() end
+			assert(C.mtx_unlock(&mutex2) == C.thrd_success)
+			--assert(C.mtx_unlock(&mutex) == C.thrd_success)
 		--end
-		if v.state == CHUNK_STATES.GENERATED and not (v.pos.x==0 and v.pos.y==0 and v.pos.z==0) then
+		--if v.state == CHUNK_STATES.GENERATED and not (v.pos.x==0 and v.pos.y==0 and v.pos.z==0) then
 			--dummy:push(calcReMesh(WORLD,v.pos.x,v.pos.y,v.pos.z))
-		end
-	end
+		--end
+	end end end
 	local cameraPos = Vector3{ camera.position.x, camera.position.y, camera.position.z };
 	--print(cameraPos.x,cameraPos.y,cameraPos.z)
 	local preprocessZone = 2
@@ -784,6 +789,7 @@ local function drawLoop()
 				--print(t.model.Mesh.triangleCount)
 				if (t.state==CHUNK_STATES.EMPTY) then
 					if C.mtx_trylock(&mutex) == C.thrd_busy then
+						t.state = CHUNK_STATES.NEW
 						_deferChunkCreation(&WORLD,{pos.x//chunkSize,pos.y//chunkSize,pos.z//chunkSize},pos.x//chunkSize,pos.y//chunkSize,pos.z//chunkSize)
 					else
 						WORLD[{pos.x//chunkSize,pos.y//chunkSize,pos.z//chunkSize}]=genChunk((@pointer(Chunk))(MemAlloc(#Chunk)),math.floor(pos.x),math.floor(pos.y),math.floor(pos.z))

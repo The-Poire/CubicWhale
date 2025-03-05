@@ -1335,9 +1335,9 @@ global function QuaternionFromEuler(pitch: float32, yaw: float32, roll: float32)
 global function QuaternionToEuler(q: Quaternion): Vector3 <cimport,nodecl> end
 global function QuaternionTransform(q: Quaternion, mat: Matrix): Quaternion <cimport,nodecl> end
 global function QuaternionEquals(p: Quaternion, q: Quaternion): cint <cimport,nodecl> end
-global A: float32 <cimport,nodecl>
-global B: float32 <cimport,nodecl>
-global C: float32 <cimport,nodecl>
+--global A: float32 <cimport,nodecl>
+--global B: float32 <cimport,nodecl>
+--global C: float32 <cimport,nodecl>
 global function MatrixDecompose(mat: Matrix, translation: *Vector3, rotation: *Quaternion, scale: *Vector3): void <cimport,nodecl> end
 global GuiStyleProp: type <cimport,nodecl> = @record{
   controlId: cushort,
