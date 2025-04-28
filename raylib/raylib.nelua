@@ -708,7 +708,7 @@ global function PollInputEvents(): void <cimport,nodecl> end
 global function WaitTime(seconds: float64): void <cimport,nodecl> end
 global function SetRandomSeed(seed: cuint): void <cimport,nodecl> end
 global function GetRandomValue(min: cint, max: cint): cint <cimport,nodecl> end
-global function LoadRandomSequence(count: cuint, min: cint, max: cint): *cint <cimport,nodecl> end
+global function LoadRandomSequence(count: cuint, min: cint, max: cint): *[0]cint <cimport,nodecl> end
 global function UnloadRandomSequence(sequence: *cint): void <cimport,nodecl> end
 global function TakeScreenshot(fileName: cstring): void <cimport,nodecl> end
 global function SetConfigFlags(flags: cuint): void <cimport,nodecl> end

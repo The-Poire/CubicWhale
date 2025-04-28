@@ -1,28 +1,13 @@
-require 'octreeStruct'
-require 'chunkStruct'
+## cdefine 'RLIGHTS_IMPLEMENTATION'
+require "raylib/raylib"
 
-local t = GetTime()
-local WORLD:octree_t <close> = newOctree(-(1<<62),-(1<<62),-(1<<62),(1_u64<<63)//CHUNK_SIZE)
-for i = -0,0 do
-	for k = -32,32 do
-		for j = -32,"2" do
-			WORLD:addNode(i*CHUNK_SIZE,k*CHUNK_SIZE,j*CHUNK_SIZE)
-		end
-	end
-	--WORLD:addNode(32,0,i*16)
-	--WORLD:addNode(0,32,i*16)
-	--WORLD:addNode(32,32,i*16)
-end
-print(-(1<<62),-(1<<62),-(1<<62),(1_u64<<63)//CHUNK_SIZE)
-print("World generation took :",GetTime()-t,"seconds")
-t=GetTime()
 
 local SCREEN_WIDTH: uint16 <const> = 1000
 local SCREEN_HEIGHT: uint16 <const> = 650
 
 InitWindow(SCREEN_WIDTH,SCREEN_HEIGHT, "WhaleBlock v.0.0.0.00")
 	local camera = Camera3D{} -- Define the camera to look into our 3d world
-	camera.position = Vector3{ 10, 16*16, 10 } -- Camera position
+	camera.position = Vector3{ 10, 10, 10 } -- Camera position
 	camera.target = Vector3{ 0, 0, 0 } -- Camera looking at point
 	camera.up = Vector3{ 0, 1, 0 } -- Camera up vector (rotation towards target)
 	camera.fovy = 45 -- Camera field-of-view Y
@@ -31,6 +16,43 @@ InitWindow(SCREEN_WIDTH,SCREEN_HEIGHT, "WhaleBlock v.0.0.0.00")
 	DisableCursor() -- Limit cursor to relative movement inside the window
 	SetTargetFPS(400)
 	SetTraceLogLevel(TraceLogLevel.LOG_WARNING)
+
+require 'octreeStruct'
+require 'chunkStruct'
+
+
+local WORLD_SIZE <comptime> = 16
+local WORLD_HEIGHT <comptime> = 16
+local t = GetTime()
+local _WORLD:octree_t <close> = newOctree(-(1<<62),-(1<<62),-(1<<62),(1_u64<<63)//CHUNK_SIZE)
+_WORLD:addNode(0,0,0)
+local WORLD:*octree_t=(@*octree_t)(_WORLD:getNodeRoot(0,0,0))
+--_WORLD:addNode(-CHUNK_SIZE*WORLD_SIZE*2,-CHUNK_SIZE*WORLD_SIZE*2,-CHUNK_SIZE*WORLD_SIZE*2)
+--local WORLD:*octree_t=(@*octree_t)(_WORLD:getNodeRoot(-CHUNK_SIZE*WORLD_SIZE*2,-CHUNK_SIZE*WORLD_SIZE*2,-CHUNK_SIZE*WORLD_SIZE*2))
+print("boot",WORLD.parent_node)
+for i = -WORLD_SIZE,WORLD_SIZE do
+	for k = -WORLD_HEIGHT,WORLD_HEIGHT do
+		for j = -WORLD_SIZE,WORLD_SIZE do
+			WORLD:addNode(i*CHUNK_SIZE,k*CHUNK_SIZE,j*CHUNK_SIZE)
+			genChunk((@*chunk_t)(WORLD:getNode(i*CHUNK_SIZE,k*CHUNK_SIZE,j*CHUNK_SIZE)),i,k,j)
+		end
+	end
+	print((i+WORLD_SIZE)/(2*WORLD_SIZE)*100)
+end
+print("World generation took :",GetTime()-t,"seconds")
+local t2=GetTime()
+for i = -WORLD_SIZE,WORLD_SIZE do
+	for k = -WORLD_HEIGHT,WORLD_HEIGHT do
+		for j = -WORLD_SIZE,WORLD_SIZE do
+			((@*chunk_t)(WORLD:getNode(i*CHUNK_SIZE,k*CHUNK_SIZE,j*CHUNK_SIZE))):loadTexture(WORLD)
+		end
+	end
+	print((i+WORLD_SIZE)/(2*WORLD_SIZE)*100)
+end
+print(-(1<<62),-(1<<62),-(1<<62),(1_u64<<63)//CHUNK_SIZE)
+print("Chunk meshing took :",GetTime()-t2,"seconds")
+print("World loading took :",GetTime()-t,"seconds")
+t=GetTime()
 
 ----Shader
 
@@ -49,6 +71,8 @@ global function drawing(block: function()) <inline>
   --assert(C.mtx_unlock(&mutex) == C.thrd_success)
   block()
   DrawFPS(10, 10);
+  --DrawText(tostring(camera.position.y),10,80)
+  --print(tostring(camera.position.y))
   EndDrawing()
 end
 
@@ -60,8 +84,51 @@ global function Mode3D(camera: Camera3D ,block: function()) <inline>
   EndMode3D()
 end
 
-global function drawLoop()
-	WORLD:drawAllNodes()
+local renderDistance <comptime> = 8
+global function drawLoop() <inline>
+	local chk:*chunk_t
+	local v1:Vector3,v2:Vector3,v3:Vector3,v4:Vector3,d:float32
+		for i = C.floor(camera.position.x)-CHUNK_SIZE*renderDistance,C.floor(camera.position.x)+CHUNK_SIZE*renderDistance,CHUNK_SIZE do
+			for k = C.floor(camera.position.y)+CHUNK_SIZE*renderDistance,C.floor(camera.position.y)-CHUNK_SIZE*renderDistance,-CHUNK_SIZE do
+				for j = C.floor(camera.position.z)-CHUNK_SIZE*renderDistance,C.floor(camera.position.z)+CHUNK_SIZE*renderDistance,CHUNK_SIZE do
+					--local ang = math.abs(Vector3DotProduct((camera.target/(#camera.target)),((camera.position-Vector3{i,k,j})/#(camera.position-Vector3{i,k,j}))))
+					v4=Vector3{i,k,j}+Vector3{CHUNK_SIZE//2,CHUNK_SIZE//2,CHUNK_SIZE//2}
+					v1,v2 = GetCameraForward(&camera),camera.position-v4
+					v3=v2/#v2
+					d=Vector3DistanceSqr(camera.position,v4)
+					--print(v1.x,v1.y,v1.z,v2.x,v2.y,v2.z,(Vector3Angle(v1,v2)))
+					if ((Vector3Angle(v1,v3)) < 2.1 and d>CHUNK_SIZE*CHUNK_SIZE*10) or d>((renderDistance)*(renderDistance)*CHUNK_SIZE*CHUNK_SIZE +CHUNK_SIZE*CHUNK_SIZE*5*5) then continue end
+					chk=(@*chunk_t)(WORLD:getNode(i,k,j))
+					if chk.state==CHUNK_STATES.VOID then
+							WORLD:addNode(i,k,j)
+							chk = (@*chunk_t)(WORLD:getNode(i,k,j))
+							genChunk(chk,i//CHUNK_SIZE,k//CHUNK_SIZE,j//CHUNK_SIZE)
+							chk:loadTexture(WORLD)--remesh(WORLD)
+					end
+					chk:draw()
+				end
+			end
+		end
+
+	--local oct:*octree_t
+	--	for i = C.floor(camera.position.x)-2*CHUNK_SIZE*renderDistance,C.floor(camera.position.x)+2*CHUNK_SIZE*renderDistance,2*CHUNK_SIZE do
+	--		for k = C.floor(camera.position.y)+2*CHUNK_SIZE*renderDistance,C.floor(camera.position.y)-2*CHUNK_SIZE*renderDistance,-2*CHUNK_SIZE do
+	--			for j = C.floor(camera.position.z)-2*CHUNK_SIZE*renderDistance,C.floor(camera.position.z)+2*CHUNK_SIZE*renderDistance,2*CHUNK_SIZE do
+	--				--local ang = math.abs(Vector3DotProduct((camera.target/(#camera.target)),((camera.position-Vector3{i,k,j})/#(camera.position-Vector3{i,k,j}))))
+	--				v4=Vector3{i,k,j}+Vector3{CHUNK_SIZE,CHUNK_SIZE,CHUNK_SIZE}
+	--				v1,v2 = GetCameraForward(&camera),camera.position-v4
+	--				v3=v2/#v2
+	--				d=Vector3DistanceSqr(camera.position,v4)
+	--				--print(v1.x,v1.y,v1.z,v2.x,v2.y,v2.z,(Vector3Angle(v1,v2)))
+	--				if ((Vector3Angle(v1,v3)) < 2.1 or d<((renderDistance//2)*(renderDistance//2)*CHUNK_SIZE*CHUNK_SIZE)+CHUNK_SIZE*CHUNK_SIZE) then continue end
+	--				oct=(@*octree_t)(WORLD:getNodeRoot(i,k,j))
+	--				if oct.ready == 0 and oct.pos.s == CHUNK_SIZE*2 then
+	--					oct:genMesh(oct.pos.s//CHUNK_SIZE)
+	--				end
+	--				oct:draw()
+	--			end
+	--		end
+	--	end
 end
 
 -- Main game loop
@@ -85,7 +152,7 @@ while not WindowShouldClose() do        -- Detect window close button or ESC key
   CameraPitch(&camera, -mousePositionDelta.y*0.003, true, false, false)
 
 	UpdateCamera(&camera, CameraMode.CAMERA_CUSTOM)
-	cameraPos = Vector3{ camera.position.x, camera.position.y, camera.position.z };
+	--cameraPos = Vector3{ camera.position.x, camera.position.y, camera.position.z };
 	--SetShaderValue(shader, shader.locs[SHADER_LOC_VECTOR_VIEW], &cameraPos, SHADER_UNIFORM_VEC3);
 	
 	if IsKeyDown(KeyboardKey.KEY_R) then camera.target = Vector3{ 0, 0, 0 } end
@@ -96,7 +163,8 @@ while not WindowShouldClose() do        -- Detect window close button or ESC key
 		ClearBackground(BLUE)
 
 		Mode3D(camera, drawLoop)
-		WORLD:drawAllNodes()
+		--WORLD:drawAllNodes()
+		
 
 	end)
 end

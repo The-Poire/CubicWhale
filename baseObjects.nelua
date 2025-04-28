@@ -30,6 +30,14 @@ global function loadByteMask(x:int64,y:int64,z:int64) <inline>
 	return byte_mask,offset
 end
 
+global function AllocateMeshData(mesh:*Mesh,triangleCount:integer)
+	mesh.vertexCount = triangleCount*3
+	mesh.triangleCount = triangleCount
+
+	mesh.vertices = (@*float32)(MemAlloc(mesh.vertexCount * 3 * #float32))
+	mesh.texcoords = (@*float32)(MemAlloc(mesh.vertexCount * 2 * #float32))
+end
+
 global Cube: type = @record{
 	x:int64,
 	y:int64,
@@ -136,7 +144,7 @@ global function subQuad(a:Cube,b:*Cube):(byte,byte,Cube) <inline>
 															s=0
 														}
 	end
-	return 0b00000000,8
+	return 0b00000000,8,(@Cube){x=0,y=0,z=0,s=0}
 end
 
 

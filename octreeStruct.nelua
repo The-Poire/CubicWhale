@@ -15,11 +15,12 @@ global octree_t:type = @record{
 	child_nodes:[8]pointer,
 	child_types:byte,
 	model:Model,
-	pos:Cube
+	ready:byte,
+	pos:Cube,
 }
 ##__OCTREE_T__ = true
 ##if not __CHUNK_T__ then
-	global CHUNK_SIZE <const> = 16
+	global CHUNK_SIZE <comptime> = 32
 ##end
 
 global ALREADY_TAKEN_NODE <const> = 0
@@ -42,12 +43,14 @@ global function newOctree(x:int64,y:int64,z:int64,s:uint64,p:facultative(*octree
 	rtn.pos = (@Cube){x=x,y=y,z=z,s=(s*CHUNK_SIZE) or (2*CHUNK_SIZE)}
 	##if not p.type.is_niltype then
 		--print(p)
-		$p=rtn
 		--print(p)
 		## if not root.type.is_niltype then
-			p.parent_node = (@*octree_t)(root)
+			rtn.parent_node = (@*octree_t)(root)
 		##end
 		--return &rtn
+		rtn.ready = 0
+		$p=rtn
+			--print("hihi",p.parent_node)
 	--##else
 		--return rtn
 	##end
@@ -58,34 +61,73 @@ end
 
 local function printOct(currOct:*octree_t)
 	local str:string = currOct.pos:__tostring()
-	print("currOct",str)
+	print("currOct",currOct,str,currOct.parent_node)
 	str:destroy()
 end
 
-function octree_t:getNode(x:int64,y:int64,z:int64)
+--print(-1//CHUNK_SIZE*CHUNK_SIZE,-1//CHUNK_SIZE*CHUNK_SIZE,-1//CHUNK_SIZE*CHUNK_SIZE)
+
+local EmptyChunk
+function octree_t:getNode(x:int64,y:int64,z:int64):pointer
 	x=x//CHUNK_SIZE*CHUNK_SIZE
 	y=y//CHUNK_SIZE*CHUNK_SIZE
 	z=z//CHUNK_SIZE*CHUNK_SIZE
 	--print("Adding Node at ",x,y,z,CHUNK_SIZE)
 	local chube:Cube = {x=x,y=y,z=z,s=CHUNK_SIZE}
 	local currOct:*octree_t=self
+	while currOct.parent_node~=nilptr and not (chube+currOct.pos) do
+		--printOct(currOct)
+		currOct = currOct.parent_node
+	end
 	while true do
 		--printOct(currOct)
 		local offset:byte
 		local byte_mask:byte
 			byte_mask,offset = subQuad(currOct.pos,chube)
-		if offset==8 then
-			return
+		--print(currOct,currOct.pos,offset,byte_mask,currOct.child_nodes[offset]==nilptr,currOct.child_nodes[offset],currOct.child_types,currOct.pos.s>>1>CHUNK_SIZE)
+		if offset==8 or currOct.child_nodes[offset]==nilptr then
+			return (@pointer)(&EmptyChunk)
 		elseif currOct.pos.s>>1>CHUNK_SIZE then
 			currOct = (@*octree_t)(currOct.child_nodes[offset])
 		else
 			return currOct.child_nodes[offset]
 		end
 	end
+	return (@pointer)(&EmptyChunk)
+end
+
+function octree_t:getNodeRoot(x:int64,y:int64,z:int64)
+	x=x//CHUNK_SIZE*CHUNK_SIZE
+	y=y//CHUNK_SIZE*CHUNK_SIZE
+	z=z//CHUNK_SIZE*CHUNK_SIZE
+	--print("Getting Node at ",x,y,z,CHUNK_SIZE)
+	local chube:Cube = {x=x,y=y,z=z,s=CHUNK_SIZE}
+	local currOct:*octree_t=self
+	while currOct.parent_node~=nilptr and not (chube+currOct.pos) do
+		currOct = currOct.parent_node
+	end
+	while true do
+		--printOct(currOct)
+		local offset:byte
+		local byte_mask:byte
+			byte_mask,offset = subQuad(currOct.pos,chube)
+		--print(currOct,currOct.pos,offset,byte_mask,currOct.child_nodes[offset]==nilptr,currOct.child_nodes[offset],currOct.child_types,currOct.pos.s>>1>CHUNK_SIZE)
+		if offset==8 or currOct.child_nodes[offset]==nilptr then
+			return currOct
+		elseif currOct.pos.s>>1>CHUNK_SIZE then
+			currOct = (@*octree_t)(currOct.child_nodes[offset])
+		else
+			return currOct
+		end
+	end
+	return
 end
 
 --New Chunk
 require 'chunkStruct'
+EmptyChunk=newChunk()
+EmptyChunk.state=CHUNK_STATES.VOID
+EmptyChunk.size=0
 function octree_t:addNode(x:int64,y:int64,z:int64)
 	x=x//CHUNK_SIZE*CHUNK_SIZE
 	y=y//CHUNK_SIZE*CHUNK_SIZE
@@ -94,12 +136,19 @@ function octree_t:addNode(x:int64,y:int64,z:int64)
 	--print("Adding Node at ",x,y,z,CHUNK_SIZE)
 	local chube:Cube = {x=x,y=y,z=z,s=CHUNK_SIZE}
 	local currOct:*octree_t=self
+	--print(currOct.parent_node)
+	while currOct.parent_node~=nilptr or not (chube+currOct.pos) do
+		--print("Aiming",currOct,(chube+currOct.pos),currOct.pos)
+		currOct = currOct.parent_node
+	end
+	--print("Adding node at",x,y,z)
 	while true do
 		--printOct(currOct)
 
 		local offset:byte
 		local byte_mask:byte
 		local tmpCube:Cube
+		--print(currOct,(chube+currOct.pos),currOct.pos)
 			byte_mask,offset,tmpCube = subQuad(currOct.pos,chube)
 			_x,_y,_z = tmpCube.x,tmpCube.y,tmpCube.z
 		if offset==8 then
@@ -107,16 +156,19 @@ function octree_t:addNode(x:int64,y:int64,z:int64)
 		elseif currOct.pos.s>>1>CHUNK_SIZE then
 
 			--print(byte_mask,offset,_x,_y,_z)
-			if unlikely(currOct.child_nodes[offset] == nilptr) then
+			if unlikely(currOct.child_nodes[offset] == nilptr) then--and packed_bool(currOct.child_types,offset+1) and currOct.pos.s>=CHUNK_SIZE*2 then
 				local oct:pointer = (alloc:alloc0(#@octree_t))
 				dealloc_list:push(oct)
 				--print(currOct.pos.s//CHUNK_SIZE//2)
 				newOctree(_x,_y,_z,
 					(currOct.pos.s>>1)//CHUNK_SIZE,
 					(@*octree_t)(oct),currOct)
-				print("Creating Sub-Node at",_x,_y,_z,currOct.pos.s>>1,(@*octree_t)(oct),self)
+				--print("Creating Sub-Node at",_x,_y,_z,currOct.pos.s>>1,(@*octree_t)(oct),self,(@*octree_t)(oct).parent_node)
+				--print("HIER",(@*octree_t)(oct).parent_node,currOct)
+
 				--currOct.child_types = currOct.child_types & ~byte_mask
 				currOct.child_nodes[offset] = oct
+				--print((@*octree_t)(currOct.child_nodes[offset]).parent_node)
 			end
 			currOct = (@*octree_t)(currOct.child_nodes[offset])
 			--print(currOct.pos.s//2+currOct.pos.x)
@@ -131,175 +183,7 @@ function octree_t:addNode(x:int64,y:int64,z:int64)
 			return true,NODE_SUCCESS
 		end
 	end
-	--[=======[
-	while true do
-		printOct(currOct)
-		--print("nodeit",((x-currOct.pos.x)//(currOct.pos.s)),((y-currOct.pos.y)//(currOct.pos.s)),((z-currOct.pos.z)//(currOct.pos.s)),currOct.pos.s)
 
-		if currOct.pos.s == 32 then
-			--print(currOct.pos.s//2,((_y-currOct.pos.y)/(currOct.pos.s//2)))
-			--printOct(currOct)
-			x=((_x-currOct.pos.x)//(currOct.pos.s//2))
-			y=((_y-currOct.pos.y)//(currOct.pos.s//2))
-			z=((_z-currOct.pos.z)//(currOct.pos.s//2))
-			local byte_mask,offset = loadByteMask(x,y,z)
-
-			currOct.child_types = currOct.child_types | byte_mask
-			local chk:pointer = (alloc:alloc0(#@chunk_t))
-			print("Creating Chunk at",currOct.pos.x+x*CHUNK_SIZE,currOct.pos.y+y*CHUNK_SIZE,currOct.pos.z+z*CHUNK_SIZE,(@*chunk_t)(chk),self)
-			newChunk(currOct.pos.x+x*CHUNK_SIZE,currOct.pos.y+y*CHUNK_SIZE,currOct.pos.z+z*CHUNK_SIZE,(@*chunk_t)(chk),currOct)
-			currOct.child_nodes[offset] = chk
-			break
-		end
-
-		--print(x,y,z)
-		if currOct.pos+(@Cube){x=_x,y=_y,z=_z,s=CHUNK_SIZE} then
-			x=((_x-currOct.pos.x)//(currOct.pos.s//2-1))
-			y=((_y-currOct.pos.y)//(currOct.pos.s//2-1))
-			z=((_z-currOct.pos.z)//(currOct.pos.s//2-1))
-			print(x,y,z)
-	
-			local byte_mask,offset = loadByteMask(x,y,z)
-			--print(offset,currOct.child_nodes[offset],nilptr)
-			if unlikely(currOct.child_nodes[offset] == nilptr) then
-				local oct:pointer = (alloc:alloc0(#@octree_t))
-				dealloc_list:push(oct)
-				--print(currOct.pos.s//CHUNK_SIZE//2)
-				newOctree(x*currOct.pos.s//2,y*currOct.pos.s//2,z*currOct.pos.s//2,	
-					currOct.pos.s//2//CHUNK_SIZE,
-					(@*octree_t)(oct),currOct)
-				print("Creating Sub-Node at",x,y,z,currOct.pos.s//2,(@*octree_t)(oct),self)
-				--currOct.child_types = currOct.child_types & ~byte_mask
-				currOct.child_nodes[offset] = oct
-			end
-			currOct=(@*octree_t)(currOct.child_nodes[offset])
-		else
-			if likely(currOct.parent_node == nilptr) then
-				local oct:pointer = (alloc:alloc0(#@octree_t))
-				dealloc_list:push(oct)
-				--print(currOct.pos.s//CHUNK_SIZE//2)
-				newOctree(currOct.pos.x-currOct.pos.s,currOct.pos.y-currOct.pos.s,currOct.pos.z-currOct.pos.s,	
-					currOct.pos.s*2//CHUNK_SIZE,
-					(@*octree_t)(oct))
-				print("Creating Root-Node at",currOct.pos.x-currOct.pos.s,currOct.pos.y-currOct.pos.s,currOct.pos.z-currOct.pos.s,currOct.pos.s*2,(@*octree_t)(oct),self)
-				currOct.parent_node = (@*octree_t)(oct)
-
-				x=((currOct.pos.x-currOct.parent_node.pos.x)//(currOct.parent_node.pos.s//2-1))
-				y=((currOct.pos.y-currOct.parent_node.pos.y)//(currOct.parent_node.pos.s//2-1))
-				z=((currOct.pos.z-currOct.parent_node.pos.z)//(currOct.parent_node.pos.s//2-1))
-				print(x,y,z)
-				local byte_mask,offset = loadByteMask(x,y,z)
-				currOct.parent_node.child_nodes[offset]=(@pointer)(currOct)
-			end
-			currOct = currOct.parent_node
-		end
-		--assert(_y~=48 or offset==2)
-	end--]=======]
-	--[==[]=]
-	if self.pos+(@Cube){x=x,y=y,z=z,s=CHUNK_SIZE} then
-
-		if self.pos.s == CHUNK_SIZE*2 then
-
-			x,y,z = (x-self.pos.x)//CHUNK_SIZE,(y-self.pos.y)//CHUNK_SIZE,(z-self.pos.z)//CHUNK_SIZE
-			--print(CHUNK_SIZE,(x//CHUNK_SIZE-self.pos.x//CHUNK_SIZE),(y//CHUNK_SIZE-self.pos.y//CHUNK_SIZE),(z//CHUNK_SIZE-self.pos.z//CHUNK_SIZE))
-			print(CHUNK_SIZE,x,y,z)
-			local byte_mask,offset = loadByteMask(x,y,z)
-			if packed_bool(self.child_types,offset+1) then
-				return false, ALREADY_TAKEN_NODE
-			end
-			--print(self.child_types)
-			self.child_types = self.child_types | byte_mask
-			local chk:pointer = (alloc:alloc0(#@chunk_t))
-			print("Creating Chunk at",self.pos.x+x*CHUNK_SIZE,self.pos.y+y*CHUNK_SIZE,self.pos.z+z*CHUNK_SIZE,(@*chunk_t)(chk),self)
-			newChunk(self.pos.x+x*CHUNK_SIZE,self.pos.y+y*CHUNK_SIZE,self.pos.z+z*CHUNK_SIZE,(@*chunk_t)(chk),self)
-			self.child_nodes[offset] = chk
-			--print(self.child_nodes[offset],chk)
-			--print(self.child_types)
-			--print(byte_mask)
-
-		else
-
-			local currOct:*octree_t = self
-			require 'vector'
-			local next_node_pointer:vector(*octree_t) <close>
-			local byte_mask,offset
-			while true do
-				do
-					local str:string = currOct.pos:__tostring()
-					print("nodeit",str,currOct.pos.s//2,currOct.pos.s//CHUNK_SIZE//2,offset)
-					str:destroy()
-				end
-				print(x,y,z,currOct.pos.x,currOct.pos.y,currOct.pos.z,((x-currOct.pos.x)//(currOct.pos.s//2)),((y-currOct.pos.y)//(currOct.pos.s//2)),((z-currOct.pos.z)//(currOct.pos.s//2)))
-
-				byte_mask,offset = loadByteMask(
-					((x-currOct.pos.x)//(currOct.pos.s//2)),
-					((y-currOct.pos.y)//(currOct.pos.s//2)),
-					((z-currOct.pos.z)//(currOct.pos.s//2))
-				)
-				if currOct.pos.s > 32 and packed_bool(currOct.child_types,offset+1) then
-					if unlikely(currOct.child_nodes[offset] == nilptr) then
-						local oct:pointer = (alloc:alloc0(#@octree_t))
-						dealloc_list:push(oct)
-						--print(currOct.pos.s//CHUNK_SIZE//2)
-						newOctree(
-							((x-currOct.pos.x)//(currOct.pos.s//2)),
-							((y-currOct.pos.y)//(currOct.pos.s//2)),
-							((z-currOct.pos.z)//(currOct.pos.s//2)),	
-							currOct.pos.s//CHUNK_SIZE//2,
-							(@*octree_t)(oct),currOct)
-						currOct.child_nodes[offset] = oct
-						x = ((x-currOct.pos.x)//(currOct.pos.s//2))
-						y = ((y-currOct.pos.y)//(currOct.pos.s//2))
-						z = ((z-currOct.pos.z)//(currOct.pos.s//2))
-					end
-					--print(nilptr,currOct.child_nodes[offset],packed_bool(currOct.child_types,offset+1),(@*octree_t)(	currOct.child_nodes[offset]).pos.s)
-					currOct = (@*octree_t)(currOct.child_nodes[offset])
-				else
-					if likely(currOct.child_nodes[offset] == nilptr) then
-						local chk:pointer = (alloc:alloc0(#@chunk_t))
-						print("Creating Chunk at",((x-currOct.pos.x)//(currOct.pos.s//2)),((y-currOct.pos.y)//(currOct.pos.s//2)),((z-currOct.pos.z)//(currOct.pos.s//2)),(@*chunk_t)(chk),currOct)
-						newChunk(
-							((x-currOct.pos.x)//(currOct.pos.s//2)),
-							((y-currOct.pos.y)//(currOct.pos.s//2)),
-							((z-currOct.pos.z)//(currOct.pos.s//2)),
-							(@*chunk_t)(chk),currOct)
-						self.child_nodes[offset] = chk
-						self.child_types = self.child_types | byte_mask
-						return true, NODE_SUCCESS
-					else
-						return false, ALREADY_TAKEN_NODE
-					end
-					break
-				end
-				--if #next_node_pointer==0 then break end
-				--currOct = next_node_pointer:pop()
-			end
-
-		end
-	else
-
-		local currOct:*octree_t=self
-		while not (currOct.pos+(@Cube){x=x,y=y,z=z,s=CHUNK_SIZE}) do
-			if unlikely(currOct.parent_node==nilptr) then
-				local oct:pointer = (alloc:alloc0(#@octree_t))
-				dealloc_list:push(oct)
-				print(
-					(currOct.pos.x//(currOct.pos.s*2)-currOct.pos.s),
-					(currOct.pos.y//(currOct.pos.s*2)-currOct.pos.s),
-					(currOct.pos.z//(currOct.pos.s*2)-currOct.pos.s),
-					currOct.pos.s*2)
-				newOctree(
-					(currOct.pos.x//(currOct.pos.s*2)-currOct.pos.s),
-					(currOct.pos.y//(currOct.pos.s*2)-currOct.pos.s),
-					(currOct.pos.z//(currOct.pos.s*2)-currOct.pos.s),
-					currOct.pos.s//CHUNK_SIZE*2,
-					(@*octree_t)(oct))
-				currOct.parent_node = (@*octree_t)(oct)
-			end
-
-			currOct=currOct.parent_node
-		end
-	end--]==]
 	return true, NODE_SUCCESS
 end
 
@@ -349,21 +233,13 @@ function octree_t:freeAllNodes():boolean
 		alloc:dealloc(dealloc_list:pop())
 	end
 
-
-	--[[currOct = self
-	while true do
-		if #last_node_pointer==0 then break end
-		currOct = last_node_pointer:pop()
-		if currOct~=nilptr then
-			print(currOct)
-		end
-		--print(currOct,self)
-		--if currOct ~= self and currOct~=nilptr then
-		--	alloc:dealloc(currOct)
-		--end
-	end]]
-
 	return true
+end
+
+function octree_t:draw()
+	if self.ready == 2 then
+		DrawModel(self.model,Vector3{self.pos.x,self.pos.y,self.pos.z},self.pos.s//CHUNK_SIZE,WHITE)
+	end
 end
 
 function octree_t:drawAllNodes():boolean
@@ -375,6 +251,7 @@ function octree_t:drawAllNodes():boolean
 	local next_node_pointer:vector(*octree_t) <close>
 	while true do
 		for i = 0,7 do
+			--print(currOct)
 			if not packed_bool(currOct.child_types,i+1) then
 				(@*chunk_t)(currOct.child_nodes[i]):draw()
 			elseif currOct.child_nodes[i]~=nilptr then
@@ -389,8 +266,6 @@ end
 
 function octree_t:destroy()
 	self:freeAllNodes()
-	--alloc:spandealloc(self.blockArray)
-	--alloc:spandealloc(self.blockDictionary)
 end
 
 function octree_t:__close()
