@@ -1,0 +1,78 @@
+##[[
+cdefine "FNL_IMPL"
+cinclude 'FastNoiseLite.h'
+]]
+
+global FNLfloat:type = @float64
+
+global fnl_noise_type:type <cimport,nodecl,using> = @enum{
+    FNL_NOISE_OPENSIMPLEX2=0,
+    FNL_NOISE_OPENSIMPLEX2S,
+    FNL_NOISE_CELLULAR,
+    FNL_NOISE_PERLIN,
+    FNL_NOISE_VALUE_CUBIC,
+    FNL_NOISE_VALUE
+}
+
+global fnl_rotation_type_3d:type <cimport,nodecl,using> = @enum{
+    FNL_ROTATION_NONE=0,
+    FNL_ROTATION_IMPROVE_XY_PLANES,
+    FNL_ROTATION_IMPROVE_XZ_PLANES
+}
+
+global fnl_fractal_type:type <cimport,nodecl,using> = @enum{
+    FNL_FRACTAL_NONE=0,
+    FNL_FRACTAL_FBM,
+    FNL_FRACTAL_RIDGED,
+    FNL_FRACTAL_PINGPONG,
+    FNL_FRACTAL_DOMAIN_WARP_PROGRESSIVE,
+    FNL_FRACTAL_DOMAIN_WARP_INDEPENDENT
+}
+
+global fnl_cellular_distance_func:type <cimport,nodecl,using> = @enum{
+    FNL_CELLULAR_DISTANCE_EUCLIDEAN=0,
+    FNL_CELLULAR_DISTANCE_EUCLIDEANSQ,
+    FNL_CELLULAR_DISTANCE_MANHATTAN,
+    FNL_CELLULAR_DISTANCE_HYBRID
+}
+
+global fnl_cellular_return_type:type <cimport,nodecl,using> = @enum{
+    FNL_CELLULAR_RETURN_TYPE_CELLVALUE=0,
+    FNL_CELLULAR_RETURN_TYPE_DISTANCE,
+    FNL_CELLULAR_RETURN_TYPE_DISTANCE2,
+    FNL_CELLULAR_RETURN_TYPE_DISTANCE2ADD,
+    FNL_CELLULAR_RETURN_TYPE_DISTANCE2SUB,
+    FNL_CELLULAR_RETURN_TYPE_DISTANCE2MUL,
+    FNL_CELLULAR_RETURN_TYPE_DISTANCE2DIV,
+}
+
+global fnl_domain_warp_type:type <cimport,nodecl,using> = @enum{
+    FNL_DOMAIN_WARP_OPENSIMPLEX2=0,
+    FNL_DOMAIN_WARP_OPENSIMPLEX2_REDUCED,
+    FNL_DOMAIN_WARP_BASICGRID
+}
+
+global fnl_state:type <cimport,nodecl> = @record{
+	seed:cint,
+	frequency:float64,
+	noise_type:fnl_noise_type,
+	rotation_type_3d:fnl_rotation_type_3d,
+	fractal_type:fnl_fractal_type,
+	octaves:cint,
+	lacunarity:float64,
+	gain:float64,
+	weighted_strength:float64,
+	ping_pong_strength:float64,
+	cellular_distance_func:fnl_cellular_distance_func,
+    cellular_return_type:fnl_cellular_return_type,
+    cellular_jitter_mod:float64,
+    domain_warp_type:fnl_domain_warp_type,
+    domain_warp_amp:float64,
+}
+
+global function fnlCreateState():fnl_state <cimport,nodecl> end
+global function fnlGetNoise2D(state:*fnl_state, x:FNLfloat, y:FNLfloat):float64 <cimport,nodecl> end
+global function fnlGetNoise3D(state:*fnl_state,  x:FNLfloat, y:FNLfloat, z:FNLfloat):float64 <cimport,nodecl> end
+global function fnlDomainWarp2D(state:*fnl_state,  x:*FNLfloat, y:*FNLfloat):void <cimport,nodecl> end
+global function fnlDomainWarp3D(state:*fnl_state,  x:*FNLfloat, y:*FNLfloat, z:*FNLfloat):void <cimport,nodecl> end
+

@@ -36,6 +36,8 @@ global function AllocateMeshData(mesh:*Mesh,triangleCount:integer)
 
 	mesh.vertices = (@*float32)(MemAlloc(mesh.vertexCount * 3 * #float32))
 	mesh.texcoords = (@*float32)(MemAlloc(mesh.vertexCount * 2 * #float32))
+	--mesh.normals = (@*float32)(MemAlloc(mesh.vertexCount * 3 * #float32))
+	--mesh.colors = (@*cuchar)(MemAlloc(mesh.vertexCount * #cuchar))
 end
 
 global Cube: type = @record{
@@ -67,7 +69,7 @@ function Cube.__sub(c1:*Cube,c2:*Cube)
 	return Vector3Distance(Vector3{c1.x,c1.y,c1.z},Vector3{c2.x,c2.y,c2.z})
 end
 function Cube:toVec()
-	return Vector3{self[0],self[1],self[2]}
+	return Vector3{self.x,self.y,self.z}
 end
 
 function Cube:__tostring()

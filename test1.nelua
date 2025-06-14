@@ -17,12 +17,21 @@ InitWindow(SCREEN_WIDTH,SCREEN_HEIGHT, "WhaleBlock v.0.0.0.00")
 	SetTargetFPS(400)
 	SetTraceLogLevel(TraceLogLevel.LOG_WARNING)
 
+local shader:Shader = LoadShader("lighting.vs","lighting.fs")
+  shader.locs[SHADER_LOC_VECTOR_VIEW] =  GetShaderLocation(shader, "viewPos");
+  -- Set shader value: ambient light level
+  local ambientLoc:cint = GetShaderLocation(shader, "ambient");
+  local var:[4]float64 = { 10,100,10,50 }
+  SetShaderValue(shader, ambientLoc, &var, SHADER_UNIFORM_VEC4);
+
 require 'octreeStruct'
 require 'chunkStruct'
+require 'entityStruct'
+local ent:entity_t = newEntity(entityType.CUBE,Vector3{-.1,200,-.1},Vector3{2,.9,2},1,1,1)
 
-
-local WORLD_SIZE <comptime> = 16
-local WORLD_HEIGHT <comptime> = 16
+local WORLD_SIZE <comptime> = 4
+local WORLD_HEIGHT <comptime> = 4
+local renderDistance <comptime> = 4
 local t = GetTime()
 local _WORLD:octree_t <close> = newOctree(-(1<<62),-(1<<62),-(1<<62),(1_u64<<63)//CHUNK_SIZE)
 _WORLD:addNode(0,0,0)
@@ -51,7 +60,7 @@ for i = -WORLD_SIZE,WORLD_SIZE do
 end
 print(-(1<<62),-(1<<62),-(1<<62),(1_u64<<63)//CHUNK_SIZE)
 print("Chunk meshing took :",GetTime()-t2,"seconds")
-print("World loading took :",GetTime()-t,"seconds")
+print("World loading took :",GetTime()-t ,"seconds")
 t=GetTime()
 
 ----Shader
@@ -71,20 +80,21 @@ global function drawing(block: function()) <inline>
   --assert(C.mtx_unlock(&mutex) == C.thrd_success)
   block()
   DrawFPS(10, 10);
-  --DrawText(tostring(camera.position.y),10,80)
+  DrawText(tostring(camera.position.x),2,40,15,RED)
+  DrawText(tostring(camera.position.y),2,60,15,RED)
+  DrawText(tostring(camera.position.z),2,80,15,RED)
   --print(tostring(camera.position.y))
   EndDrawing()
 end
 
 global function Mode3D(camera: Camera3D ,block: function()) <inline>
   BeginMode3D(camera)
-  --BeginShaderMode(shader)
+  BeginShaderMode(shader)
   block()
-  --EndShaderMode()
+  EndShaderMode()
   EndMode3D()
 end
 
-local renderDistance <comptime> = 8
 global function drawLoop() <inline>
 	local chk:*chunk_t
 	local v1:Vector3,v2:Vector3,v3:Vector3,v4:Vector3,d:float32
@@ -109,7 +119,7 @@ global function drawLoop() <inline>
 				end
 			end
 		end
-
+		ent:draw()
 	--local oct:*octree_t
 	--	for i = C.floor(camera.position.x)-2*CHUNK_SIZE*renderDistance,C.floor(camera.position.x)+2*CHUNK_SIZE*renderDistance,2*CHUNK_SIZE do
 	--		for k = C.floor(camera.position.y)+2*CHUNK_SIZE*renderDistance,C.floor(camera.position.y)-2*CHUNK_SIZE*renderDistance,-2*CHUNK_SIZE do
@@ -150,8 +160,42 @@ while not WindowShouldClose() do        -- Detect window close button or ESC key
   local mousePositionDelta:Vector2 = GetMouseDelta()
   CameraYaw(&camera, -mousePositionDelta.x*0.003, false)
   CameraPitch(&camera, -mousePositionDelta.y*0.003, true, false, false)
+  if IsMouseButtonPressed(0) then
+  	local _v= GetCameraForward(&camera)
+  	local v:Vector3
+  	for i = 0,100 do
+  		v = _v*i*.1+camera.position
+  		local n=(@*chunk_t)(WORLD:getNode(C.floor(v.x),C.floor(v.y),C.floor(v.z)))
+  		if WORLD:getBlock(n,C.floor(v.x),C.floor(v.y),C.floor(v.z),true) ~= 0 then
+  			v = _v*(i-10)*.1+camera.position
+  			--print("gjk",v.x,v.y,v.z)
+  			n=(@*chunk_t)(WORLD:getNode(C.floor(v.x+.5),C.floor(v.y+.5),C.floor(v.z+.5)))
+  			n:setBlock(1,C.floor(v.x+.5),C.floor(v.y+.5),C.floor(v.z+.5),true)
+  			n.blockAmount = n.blockAmount + 1
+  			n:remesh(WORLD)
+  			break
+  		end
+  	end
+  elseif IsMouseButtonPressed(1) then
+  	local _v= GetCameraForward(&camera)
+  	local v:Vector3
+  	for i = 0,100 do
+  		v = _v*i*.1+camera.position
+  		local n=(@*chunk_t)(WORLD:getNode(C.floor(v.x),C.floor(v.y),C.floor(v.z)))
+  		if WORLD:getBlock(n,C.floor(v.x),C.floor(v.y),C.floor(v.z),true) ~= 0 then
+  			--print("gjk",v.x,v.y,v.z)
+  			--v = _v*(i-1)+camera.position
+  			n=(@*chunk_t)(WORLD:getNode(C.floor(v.x),C.floor(v.y),C.floor(v.z)))
+  			n:setBlock(0,C.floor(v.x),C.floor(v.y),C.floor(v.z),true)
+  			n.blockAmount = n.blockAmount - 1
+  			n:remesh(WORLD)
+  			break
+  		end
+  	end
+  end
 
 	UpdateCamera(&camera, CameraMode.CAMERA_CUSTOM)
+	ent:update(WORLD,GetFrameTime())
 	--cameraPos = Vector3{ camera.position.x, camera.position.y, camera.position.z };
 	--SetShaderValue(shader, shader.locs[SHADER_LOC_VECTOR_VIEW], &cameraPos, SHADER_UNIFORM_VEC3);
 	

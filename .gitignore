@@ -1,1 +1,3 @@
 libfibre
+callgrind.out.*
+gmon.out

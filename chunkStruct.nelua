@@ -64,7 +64,9 @@ end
 function chunk_t:draw()
 	if self.blockAmount~=0 and self.state==CHUNK_STATES.MODEL_DONE then
 		--DrawCube(Vector3{self.pos.x,self.pos.y,self.pos.z},CHUNK_SIZE,CHUNK_SIZE,CHUNK_SIZE,GREEN)--(@Color){self.pos[0],self.pos[1],self.pos[2],255})
+	--DrawCubeWiresV(self.pos:toVec(),Vector3{CHUNK_SIZE,CHUNK_SIZE,CHUNK_SIZE},WHITE)
 		DrawModel(self.model,Vector3{self.pos[0],self.pos[1],self.pos[2]},1.0,WHITE)
+		--DrawMesh(self.mesh,self.model.materials,self.model.transform)--,Vector3{self.pos[0],self.pos[1],self.pos[2]},1.0,WHITE)
 	end
 end
 
@@ -153,7 +155,7 @@ end
 
 require 'math'
 function chunk_t:getBlock(x:int64,y:int64,z:int64,relative:facultative(boolean)):uint32
-	if unlikely(self.state==CHUNK_STATES.VOID) then return 1 end
+	if unlikely(self.state==CHUNK_STATES.VOID) then return 0xffffffff end
 	if unlikely(#self.blockDictionary<=0) or unlikely(self.state==CHUNK_STATES.EMPTY) then return 0 end
 	local offset:uint64
 
@@ -287,34 +289,45 @@ local function addFace(mesh:*Mesh,dataindex:*integer,x:int32,y:int32,z:int32, mx
   	end
     mesh.texcoords[$dataindex*2  ] = u - textureUV_Size.x*(primary and 1 or 0)
     mesh.texcoords[$dataindex*2+1] = v - textureUV_Size.y*(secondary and 1 or 0)
+    --mesh.normals[$dataindex*3] = mx 
+    --mesh.normals[$dataindex*3+1] = my
+    --mesh.normals[$dataindex*3+2] = mz
+    --mesh.colors[$dataindex] = mx
     $dataindex = $dataindex+1
   end
 end
 
 function chunk_t:checkBlock(x:int64,y:int64,z:int64,world:*octree_t,facecount:*int64)-- <inline>
-	if world:getBlock(self, x,y,z,true) ~= 0 then
+	local a1 = world:getBlock(self, x,y,z,true)
+	if a1 ~= 0 and a1~=0xffffffff then
   	--print(x,y,z,world:getBlock(self, x,y,z))
   	--print(world:getBlock(self, x+1,y,z,true),world:getBlock(self, x-1,y,z,true),world:getBlock(self, x,y+1,z,true),world:getBlock(self, x,y-1,z,true),world:getBlock(self, x,y,z+1,true),world:getBlock(self, x,y,z-1,true))
-    if world:getBlock(self, x+1,y,z,true) == 0 then $facecount = $facecount + 1 end
-    if world:getBlock(self, x-1,y,z,true) == 0 then $facecount = $facecount + 1 end
-    if world:getBlock(self, x,y+1,z,true) == 0 then $facecount = $facecount + 1 end
-	 if world:getBlock(self, x,y-1,z,true) == 0 then $facecount = $facecount + 1 end
-    if world:getBlock(self, x,y,z+1,true) == 0 then $facecount = $facecount + 1 end
-    if world:getBlock(self, x,y,z-1,true) == 0 then $facecount = $facecount + 1 end
+		local a = world:getBlock(self, x+1,y,z,true)
+		local b = world:getBlock(self, x-1,y,z,true)
+		local c = world:getBlock(self, x,y+1,z,true)
+		local d = world:getBlock(self, x,y-1,z,true)
+		local e = world:getBlock(self, x,y,z+1,true)
+		local f = world:getBlock(self, x,y,z-1,true)
+    if a == 0 or a==0xffffffff then $facecount = $facecount + 1 end
+    if b == 0 or b==0xffffffff then $facecount = $facecount + 1 end
+    if c == 0 or c==0xffffffff then $facecount = $facecount + 1 end
+	 	if d == 0 or d==0xffffffff then $facecount = $facecount + 1 end
+    if e == 0 or e==0xffffffff then $facecount = $facecount + 1 end
+    if f == 0 or f==0xffffffff then $facecount = $facecount + 1 end
   	--if facecount>0 then panic() end
   end
 end
 
 function chunk_t:meshBlock(x:int64,y:int64,z:int64,world:*octree_t,mapMesh:*Mesh,dataindex:*integer)-- <inline>
 	local b0 = world:getBlock(self, x,y,z,true)
-	if b0 ~= 0 then
+	if b0 ~= 0 and b0 ~= 0xffffffff then
 		local b1,b2,b3,b4,b5,b6 = world:getBlock(self, x-1,y,z,true),world:getBlock(self, x+1,y,z,true),world:getBlock(self, x,y-1,z,true),world:getBlock(self, x,y+1,z,true),world:getBlock(self, x,y,z-1,true),world:getBlock(self, x,y,z+1,true)
-	  if b1 == 0 then addFace(mapMesh,dataindex,x,y,z,   0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][0]],1,false,true) end
-	  if b2 == 0 then addFace(mapMesh,dataindex,x+1,y,z, 0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][1]],1,true,true) end
-	  if b3 == 0 then addFace(mapMesh,dataindex,x,y,z,   1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][2]],1,true) end
-	  if b4 == 0 then addFace(mapMesh,dataindex,x,y+1,z, 1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][3]],1,false) end
-	  if b5 == 0 then addFace(mapMesh,dataindex,x,y,z,   1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][4]],1,false) end
-	  if b6 == 0 then addFace(mapMesh,dataindex,x,y,z+1, 1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][5]],1,true) end
+	  if b1 == 0 or b1 == 0xffffffff then addFace(mapMesh,dataindex,x,y,z,   0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][0]],1,false,true) end
+	  if b2 == 0 or b2 == 0xffffffff then addFace(mapMesh,dataindex,x+1,y,z, 0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][1]],1,true,true) end
+	  if b3 == 0 or b3 == 0xffffffff then addFace(mapMesh,dataindex,x,y,z,   1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][2]],1,true) end
+	  if b4 == 0 or b4 == 0xffffffff then addFace(mapMesh,dataindex,x,y+1,z, 1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][3]],1,false) end
+	  if b5 == 0 or b5 == 0xffffffff then addFace(mapMesh,dataindex,x,y,z,   1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][4]],1,false) end
+	  if b6 == 0 or b6 == 0xffffffff then addFace(mapMesh,dataindex,x,y,z+1, 1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][5]],1,true) end
 	end
 end
 
@@ -438,13 +451,21 @@ function octree_t:genMesh(step:int64)
 	for x=0, step*CHUNK_SIZE-1, step do
 	  for y=0, step*CHUNK_SIZE-1, step do
 	    for z=0, step*CHUNK_SIZE-1, step do
-				if self:getBlock(center, x,y,z,true) ~= 0 then
-				if self:getBlock(center, x+step,y,z,true) == 0 then facecount = facecount + 1 end
-			   if self:getBlock(center, x-step,y,z,true) == 0 then facecount = facecount + 1 end
-			   if self:getBlock(center, x,y+step,z,true) == 0 then facecount = facecount + 1 end
-				if self:getBlock(center, x,y-step,z,true) == 0 then facecount = facecount + 1 end
-			   if self:getBlock(center, x,y,z+step,true) == 0 then facecount = facecount + 1 end
-			   if self:getBlock(center, x,y,z-step,true) == 0 then facecount = facecount + 1 end
+	    		local a = self:getBlock(center, x,y,z,true)
+					if a ~= 0 and a ~= 0xffffffff then
+						local a = self:getBlock(center, x+step,y,z,true)
+						local b = self:getBlock(center, x-step,y,z,true)
+						local c = self:getBlock(center, x,y+step,z,true)
+						local d = self:getBlock(center, x,y-step,z,true)
+						local e = self:getBlock(center, x,y,z+step,true)
+						local f = self:getBlock(center, x,y,z-step,true)
+
+						if a == 0 or a == 0xffffffff then facecount = facecount + 1 end
+						if b == 0 or b == 0xffffffff then facecount = facecount + 1 end
+						if c == 0 or c == 0xffffffff then facecount = facecount + 1 end
+						if d == 0 or d == 0xffffffff then facecount = facecount + 1 end
+						if e == 0 or e == 0xffffffff then facecount = facecount + 1 end
+						if f == 0 or f == 0xffffffff then facecount = facecount + 1 end
 			  end
   	  end
   	end
@@ -459,14 +480,14 @@ function octree_t:genMesh(step:int64)
       for x=0, step*CHUNK_SIZE-1, step do
         for y=0, step*CHUNK_SIZE-1, step do
 					local b0 = self:getBlock(center, x,y,z,true)
-					if b0 ~= 0 then
+					if b0 ~= 0 and b0==0xffffffff then
 						local b1,b2,b3,b4,b5,b6 = self:getBlock(center, x-step,y,z,true),self:getBlock(center, x+step,y,z,true),self:getBlock(center, x,y-step,z,true),self:getBlock(center, x,y+step,z,true),self:getBlock(center, x,y,z-step,true),self:getBlock(center, x,y,z+step,true)
-					 	if b1 == 0 then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][0]],1,false,true) end
-					 	if b2 == 0 then addFace(mapMesh,&dataindex,x//step+1,y//step,z//step, 0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][1]],1,true,true) end
-					 	if b3 == 0 then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][2]],1,true) end
-					 	if b4 == 0 then addFace(mapMesh,&dataindex,x//step,y//step+1,z//step, 1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][3]],1,false) end
-					 	if b5 == 0 then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][4]],1,false) end
-					 	if b6 == 0 then addFace(mapMesh,&dataindex,x//step,y//step,z//step+1, 1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][5]],1,true) end
+					 	if b1 == 0 or b1==0xffffffff  then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][0]],1,false,true) end
+					 	if b2 == 0 or b2==0xffffffff  then addFace(mapMesh,&dataindex,x//step+1,y//step,z//step, 0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][1]],1,true,true) end
+					 	if b3 == 0 or b3==0xffffffff  then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][2]],1,true) end
+					 	if b4 == 0 or b4==0xffffffff  then addFace(mapMesh,&dataindex,x//step,y//step+1,z//step, 1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][3]],1,false) end
+					 	if b5 == 0 or b5==0xffffffff  then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][4]],1,false) end
+					 	if b6 == 0 or b6==0xffffffff  then addFace(mapMesh,&dataindex,x//step,y//step,z//step+1, 1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][5]],1,true) end
 					end
         end
       end
@@ -521,8 +542,9 @@ local heightMap:fnl_state = fnlCreateState()
 	heightMap.weighted_strength=0.020
 local caves:fnl_state = fnlCreateState()
 	caves.noise_type = FNL_NOISE_PERLIN
-	caves.frequency=0.09
+	caves.frequency=0.03
 	caves.domain_warp_type = FNL_DOMAIN_WARP_BASICGRID
+	caves.fractal_type = FNL_FRACTAL_DOMAIN_WARP_PROGRESSIVE
 	caves.domain_warp_amp = -77.500
 local ores:fnl_state = fnlCreateState()
 	ores.frequency=0.4
@@ -532,7 +554,7 @@ global function genChunk(chunk:*chunk_t, x:int64,y:int64,z:int64)
 	y=y*CHUNK_SIZE
 	z=z*CHUNK_SIZE
 	if y > 256+128 or y < -256-128 then 
-		chunk.state = CHUNK_STATES.EMPTY
+		chunk.state = CHUNK_STATES.VOID
 		chunk.blockAmount=0
 		return chunk
 	end

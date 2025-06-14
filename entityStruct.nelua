@@ -1,0 +1,162 @@
+##pragmas.nogc=true
+require 'memory'
+require 'hash'
+require 'span'
+require 'C'
+require 'C.threads'
+require 'baseObjects'
+
+require 'allocators.default'
+local Allocator: type = #[DefaultAllocator]#
+local alloc:Allocator
+
+global GRAVITY:float64 <const> = -1
+global AIR_FRICTION:float64 <const> = .99
+global MAX_SPEED:float64 <const> = 30
+
+global entityType:type = @enum(byte){
+	SPECTATOR_OP=0,  --Not affected by collision nor effects (immune to all interaction)
+	SPECTATOR_RG=1,  --Like SPECTATOR_OP but can be given effects,camera control, affected by certain areas, but can't interact with the world apart getting entity pos
+	GHOST       =8,  --Not affected by collision
+	GHOST_OP    =9,  --Like Ghost but immune to all but magical damage
+	SOLID       =16, --Unmovable object (|speed| = 0)
+	CUBE        =17, --Basic Object with speed, collision, inertia, acceleration
+	LIGHT_CUBE  =18, --Like CUBE but with no inertia (inertia factor > 2⁶³ units)
+	HEAVY_CUBE  =19, --Same but with too much inertia 
+}
+
+global stats_t:type = @record{
+	health:int64,
+	strength:int64,
+	speed:int64,
+
+	armor:int64,
+	magic_resitance:int64,
+	constitution:int64,
+	endurance:int64,
+
+	mana:int64,
+	mana_effiency:int64,
+	magical_power:int64,
+
+	level:int64,
+	level_locked:boolean,
+
+	--skills:skills_t {array of skills}
+	
+}
+
+global entity_t:type = @record{
+	pos:Vector3,
+	size:Vector3,
+	speed:Vector3,
+	acceleration:Vector3,
+	last_dt:float64,
+	type:entityType,
+	--stats:stats_t
+
+	--Entity settings
+	inertia:int64,
+	inertia_factor:int64,
+	weight:int64,
+	invertedWeight:float64,
+	friction:int64,
+}
+
+
+global function newEntity(type:entityType,pos:Vector3, size:Vector3, inertia_factor:int64, weight:int64,friction:int64):entity_t
+	local rtn:entity_t
+	rtn.type = type
+	rtn.pos  = pos
+	rtn.size=size
+	rtn.inertia_factor=inertia_factor
+	rtn.weight=weight
+	rtn.invertedWeight=1/weight
+	rtn.friction=friction
+
+	return rtn
+end
+
+function entity_t:applyForce(v:Vector3,force:boolean)
+	if unlikely(self.type == entityType.SOLID) then return end
+	if #v > self.inertia_factor or force then
+		self.acceleration=self.acceleration+v*self.invertedWeight
+	end
+end
+
+function entity_t:accelerate(dt:float32)
+	self.speed = Vector3Scale(self.speed + self.acceleration,AIR_FRICTION)
+	self.acceleration=Vector3Zero()
+	if #self.speed>MAX_SPEED then
+		self.speed=Vector3ClampValue(self.speed,-MAX_SPEED,MAX_SPEED)
+	end
+end
+
+function entity_t:move(dt:float32)
+	self.pos = self.pos+ self.speed*dt
+end
+
+local rays:[7]Ray
+	rays[0].direction = Vector3{1,0,0}
+	rays[1].direction = Vector3{0,1,0}
+	rays[2].direction = Vector3{0,0,1}
+	rays[3].direction = Vector3{-1,0,0}
+	rays[4].direction = Vector3{0,-1,0}
+	rays[5].direction = Vector3{0,0,-1}
+	rays[6].direction = Vector3{0,-1,0}
+function entity_t:collide(world:octree_t)
+	--local col:RayCollision
+	local chk:*chunk_t
+	local a:byte=0
+	for i = C.floor(self.pos.x),C.ceil(self.pos.x+self.size.x) do
+		for k = C.floor(self.pos.y),C.ceil(self.pos.y+self.size.y) do
+			for j = C.floor(self.pos.z),C.ceil(self.pos.z+self.size.z) do
+				--for l = 0,5 do
+					local blk = world:getBlock((@*chunk_t)(world:getNode(i,k,j)),i,k,j,true)
+					--print(blk)
+					if blk~=0 and blk~=0xffffffff then
+						return CheckCollisionBoxes(BoundingBox{self.pos,self.pos+self.size},BoundingBox{Vector3{i,k,j},Vector3{i+1,k+1,j+1}})
+					end
+					--[==[rays[4].position=self.pos
+					rays[4].position.y=rays[4].position.y+self.size.y
+					chk=(@*chunk_t)(world:getNode(i,k,j))
+					print(i,k,j,chk.pos)
+					local col=GetRayCollisionMesh(rays[4],chk.mesh,chk.model.transform)
+					print(col.distance,rays[4].position.x,rays[4].position.y,rays[4].position.z)
+					if col.distance <=self.size.y then
+						return col.hit,col.point
+					end
+
+					rays[6].position=self.pos
+					rays[6].position.x=rays[6].position.x+self.pos.x
+					rays[6].position.z=rays[6].position.z+self.pos.z
+					rays[6].position.y=rays[6].position.y+self.size.y
+					chk=(@*chunk_t)(world:getNode(i,k,j))
+					local col=GetRayCollisionMesh(rays[6],chk.mesh,chk.model.transform)
+					print(col.distance)
+					if col.distance <=self.size.y then
+						return col.hit,col.point
+					end]==]
+				--end
+			end
+		end
+	end
+	return false
+end
+
+function entity_t:update(world:octree_t,dt:float32)
+	self:applyForce(Vector3{0,GRAVITY,0},true)
+	self:accelerate(dt)
+
+	local lastPos = self.pos
+	self:move(dt)
+	local col = self:collide(world)
+	if col then
+		self.pos=lastPos
+		self.speed=Vector3Zero()
+	end
+end
+
+function entity_t:draw()
+	DrawCubeWiresV(self.pos,self.size,WHITE)
+end
