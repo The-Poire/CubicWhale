@@ -1,6 +1,13 @@
 --## pragmas.nogc = true
+## cdefine 'RLIGHTS_IMPLEMENTATION'
+require "raylib/raylib"
+--##cflags '-Lc:/msys64/lib/gawk'
+--##cflags '-D_UCRT'
+##cflags '-lucrt'
+
 
 require 'thread'
+require 'C.math'
 
 ## if ccinfo.has_c11_atomics then
 require 'C.stdatomic'
@@ -15,6 +22,29 @@ local function thread_safe_print(...: varargs)
   assert(C.mtx_unlock(&mutex) == C.thrd_success)
 end
 
+global function Sleep(milliseconds:int64)
+   local start:C.timespec
+  C.timespec_get( &start, C.TIME_UTC )
+
+  local _end:C.timespec = start
+  local new_nsec = _end.tv_nsec + milliseconds * 1000000
+  _end.tv_sec = C.floor(_end.tv_sec + new_nsec / 1000000000)
+  _end.tv_nsec = new_nsec % 1000000000
+  
+  local current:C.timespec;
+  while ( true ) do
+    C.timespec_get( &current, C.TIME_UTC )
+
+    if ( current.tv_sec < _end.tv_sec ) then
+      C.thrd_yield()
+    elseif ( current.tv_sec > _end.tv_sec ) or ( current.tv_nsec > _end.tv_nsec ) then
+      break
+    else
+      C.thrd_yield()
+    end
+  end
+end
+
 local function add_thread(arg: pointer): cint
   local tid: isize = (@isize)(arg)
   thread_safe_print('started thread', tid)
@@ -22,6 +52,7 @@ local function add_thread(arg: pointer): cint
     assert(C.mtx_lock(&mutex) == C.thrd_success)
     counter = counter + 1
     assert(C.mtx_unlock(&mutex) == C.thrd_success)
+    Sleep(3)
     ## if ccinfo.has_c11_atomics then
     C.atomic_fetch_add(&atomic_counter, 1)
     ## end

@@ -1,20 +1,31 @@
 ##[[
-cinclude '<raylib.h>'
-cinclude '<raymath.h>'
-cinclude '<rlgl.h>'
-cinclude 'rcamera.h'
-cinclude 'rlights.h'
-linklib 'raylib'
 if ccinfo.is_windows then
-  linklib 'glfw3'
+  cinclude '<raylib.h>'
+  cinclude '<raymath.h>'
+  cinclude '<rlgl.h>'
+  cinclude 'rcamera.h'
+  cinclude 'rlights.h'
+
+  --cflags '-Lc:/msys64/mingw64/lib'
+  --cflags "-I'c:/Program Files/Java/jdk-22/bin/api-ms-win-crt-time-l1-1-0'"
+  --cflags "-IC:/msys64/mingw64/include"
+  --cflags "-IC:/msys64/mingw64/include/GLFW"
+  linklib 'C:/msys64/mingw64/lib/libglfw3.dll.a'
+  linklib 'C:/msys64/mingw64/lib/libraylib.dll.a'
 else
     if ccinfo.is_linux or ccinfo.is_gnu_linux then
-        linklib "GL"
-        linklib "m"
-        linklib "dl"
-        linklib "rt"
-        linklib "X11"
-        linklib "pthread"
+        cinclude '<raylib.h>'
+        cinclude '<raymath.h>'
+        cinclude '<rlgl.h>'
+        cinclude 'rcamera.h'
+        cinclude 'rlights.h'
+        linklib 'raylib'
+          linklib "GL"
+          linklib "m"
+          linklib "dl"
+          linklib "rt"
+          linklib "X11"
+          linklib "pthread"
     end
 end
 ]]

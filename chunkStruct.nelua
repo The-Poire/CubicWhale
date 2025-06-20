@@ -3,18 +3,19 @@ require 'memory'
 require 'hash'
 require 'span'
 require 'C'
-require 'C.threads'
+require 'thread'
 require 'baseObjects'
 
-  require 'allocators.default'
+  --require 'allocators.default'
 
-  local Allocator: type = #[DefaultAllocator]#
-  local alloc:Allocator
+  --global Allocator: type = #[DefaultAllocator]#
+  --local alloc:Allocator
 
 ## if not CHUNK_SIZE then
 	global CHUNK_SIZE <comptime> = 32
 ##end
 local CHUNK_SIZE_MAXBLOCKS <comptime> = CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE
+global CHUNK_SIZE_DIAGONAL <comptime> = CHUNK_SIZE*#[math.sqrt(3)]#
 
 ##__CHUNK_T__=true
 
@@ -22,6 +23,7 @@ global CHUNK_STATES = @enum(byte){
 	NEW=0,
 	VOID=1,
 	EMPTY=2,
+	LOADING=3,
 	GENERATED=4,
 	MODEL_DONE=8,
 	TRANSPARENT=9,
@@ -29,27 +31,16 @@ global CHUNK_STATES = @enum(byte){
 
 global chunk_t:type = @record{
 	blockArray:span(byte),
-		--blockArray:[CHUNK_SIZE_MAXBLOCKS]byte,
 	blockDictionary:span(uint32),
 	blockAmount:uint64,
 	pos:Cube,
 	state:CHUNK_STATES,
 	model:Model,
-	mesh:Mesh,
+	mesh:*Mesh,
 	size:byte,
 	blockMutex:C.mtx_t,
 	modelMutex:C.mtx_t,
-	parent_node:*octree_t
---[[
-	##if CHUNK_SIZE_MAXBLOCKS.value<256 then
-		blockAmount:byte,
-	##elseif CHUNK_SIZE_MAXBLOCKS.value<65536 then
-		blockAmount:uint16,
-	##elseif CHUNK_SIZE_MAXBLOCKS.value<4294967296 then
-		blockAmount:uint32,
-	##else
-		blockAmount:uint64,
-	##end]]
+	parent_node:*octree_t,
 }
 
 function chunk_t.__atindex(chk:*chunk_t,key:integer)
@@ -64,8 +55,8 @@ end
 function chunk_t:draw()
 	if self.blockAmount~=0 and self.state==CHUNK_STATES.MODEL_DONE then
 		--DrawCube(Vector3{self.pos.x,self.pos.y,self.pos.z},CHUNK_SIZE,CHUNK_SIZE,CHUNK_SIZE,GREEN)--(@Color){self.pos[0],self.pos[1],self.pos[2],255})
-	--DrawCubeWiresV(self.pos:toVec(),Vector3{CHUNK_SIZE,CHUNK_SIZE,CHUNK_SIZE},WHITE)
-		DrawModel(self.model,Vector3{self.pos[0],self.pos[1],self.pos[2]},1.0,WHITE)
+	--DrawCubeWiresV(self.pos:toVec(),ctor3{CHUNK_SIZE,CHUNK_SIZE,CHUNK_SIZE},WHITE)
+		DrawModel(self.model,Vector3{self.pos.x,self.pos.y,self.pos.z},1.0,WHITE)
 		--DrawMesh(self.mesh,self.model.materials,self.model.transform)--,Vector3{self.pos[0],self.pos[1],self.pos[2]},1.0,WHITE)
 	end
 end
@@ -109,13 +100,14 @@ function chunk_t:setBlock(blockId:uint32,x:uint64,y:uint64,z:uint64,relative:fac
 
 	local dicItem = has(blockId,self.blockDictionary)
 	if dicItem == -1 then
+		--assert(C.mtx_lock(&__MEMORY_MUTEX) == C.thrd_success)
 
 		if #self.blockDictionary==0 and self.size==0 then
-			self.blockArray=alloc:spanalloc(@byte,CHUNK_SIZE_MAXBLOCKS)
+			self.blockArray=alloc:xspanalloc0(@byte,CHUNK_SIZE_MAXBLOCKS)
 			self.size=1
 		elseif #self.blockDictionary>=256 and self.size==1 then
 			print("REALLOCATED CHUNK",self)
-			local tmp:span(byte) = alloc:spanalloc(@byte,2*CHUNK_SIZE_MAXBLOCKS)
+			local tmp:span(byte) = alloc:xspanalloc0(@byte,2*CHUNK_SIZE_MAXBLOCKS)
 			for i = 0,#self.blockArray-1 do
 				tmp[i*2+1]=self.blockArray[i]
 			end
@@ -128,6 +120,7 @@ function chunk_t:setBlock(blockId:uint32,x:uint64,y:uint64,z:uint64,relative:fac
 		self.blockDictionary=alloc:xspanrealloc(self.blockDictionary,#self.blockDictionary+1)
 		self.blockDictionary[#self.blockDictionary-1]=blockId
 
+		--assert(C.mtx_unlock(&__MEMORY_MUTEX) == C.thrd_success)
 		if self.size==2 then
 			--print(#self.blockDictionary-1,(@byte)(#self.blockDictionary-1),(#self.blockDictionary-1>>8),(#self.blockDictionary-1))
 			self.blockArray[offset*2]   = (@byte)(#self.blockDictionary-1>>8)
@@ -157,6 +150,7 @@ require 'math'
 function chunk_t:getBlock(x:int64,y:int64,z:int64,relative:facultative(boolean)):uint32
 	if unlikely(self.state==CHUNK_STATES.VOID) then return 0xffffffff end
 	if unlikely(#self.blockDictionary<=0) or unlikely(self.state==CHUNK_STATES.EMPTY) then return 0 end
+	--if unlikely(#self.blockArray<CHUNK_SIZE_MAXBLOCKS-1) then return 0xffffffff end
 	local offset:uint64
 
 	##if relative.type.is_niltype or not relative.value then
@@ -176,7 +170,7 @@ function chunk_t:getBlock(x:int64,y:int64,z:int64,relative:facultative(boolean))
 	--for i = 0,#self.blockArray-1 do print(self.blockArray[i]) end end
 	switch self.size do
 	case 1 then
-		return self.blockDictionary[self.blockArray[offset]]
+		return self.blockDictionary[self.blockArray[offset]%#self.blockDictionary]
 	case 2 then
 		return self.blockDictionary[256*(@uint16)(self.blockArray[offset*2]) + (@uint16)(self.blockArray[offset*2+1])]
 	else
@@ -299,44 +293,50 @@ end
 
 function chunk_t:checkBlock(x:int64,y:int64,z:int64,world:*octree_t,facecount:*int64)-- <inline>
 	local a1 = world:getBlock(self, x,y,z,true)
-	if a1 ~= 0 and a1~=0xffffffff then
+	if a1 ~= 0 then
   	--print(x,y,z,world:getBlock(self, x,y,z))
   	--print(world:getBlock(self, x+1,y,z,true),world:getBlock(self, x-1,y,z,true),world:getBlock(self, x,y+1,z,true),world:getBlock(self, x,y-1,z,true),world:getBlock(self, x,y,z+1,true),world:getBlock(self, x,y,z-1,true))
-		local a = world:getBlock(self, x+1,y,z,true)
-		local b = world:getBlock(self, x-1,y,z,true)
-		local c = world:getBlock(self, x,y+1,z,true)
-		local d = world:getBlock(self, x,y-1,z,true)
-		local e = world:getBlock(self, x,y,z+1,true)
-		local f = world:getBlock(self, x,y,z-1,true)
-    if a == 0 or a==0xffffffff then $facecount = $facecount + 1 end
-    if b == 0 or b==0xffffffff then $facecount = $facecount + 1 end
-    if c == 0 or c==0xffffffff then $facecount = $facecount + 1 end
-	 	if d == 0 or d==0xffffffff then $facecount = $facecount + 1 end
-    if e == 0 or e==0xffffffff then $facecount = $facecount + 1 end
-    if f == 0 or f==0xffffffff then $facecount = $facecount + 1 end
+		--local a = world:getBlock(self, x+1,y,z,true)
+		--local b = world:getBlock(self, x-1,y,z,true)
+		--local c = world:getBlock(self, x,y+1,z,true)
+		--local d = world:getBlock(self, x,y-1,z,true)
+		--local e = world:getBlock(self, x,y,z+1,true)
+		--local f = world:getBlock(self, x,y,z-1,true)
+   	if world:getBlock(self, x+1,y,z,true) == 0 then $facecount = $facecount + 1 end
+   	if world:getBlock(self, x-1,y,z,true) == 0 then $facecount = $facecount + 1 end
+   	if world:getBlock(self, x,y+1,z,true) == 0 then $facecount = $facecount + 1 end
+		if world:getBlock(self, x,y-1,z,true) == 0 then $facecount = $facecount + 1 end
+   	if world:getBlock(self, x,y,z+1,true) == 0 then $facecount = $facecount + 1 end
+   	if world:getBlock(self, x,y,z-1,true) == 0 then $facecount = $facecount + 1 end
   	--if facecount>0 then panic() end
   end
 end
 
 function chunk_t:meshBlock(x:int64,y:int64,z:int64,world:*octree_t,mapMesh:*Mesh,dataindex:*integer)-- <inline>
 	local b0 = world:getBlock(self, x,y,z,true)
-	if b0 ~= 0 and b0 ~= 0xffffffff then
+	if b0 ~= 0 and b0 ~=0xffffffff then
 		local b1,b2,b3,b4,b5,b6 = world:getBlock(self, x-1,y,z,true),world:getBlock(self, x+1,y,z,true),world:getBlock(self, x,y-1,z,true),world:getBlock(self, x,y+1,z,true),world:getBlock(self, x,y,z-1,true),world:getBlock(self, x,y,z+1,true)
-	  if b1 == 0 or b1 == 0xffffffff then addFace(mapMesh,dataindex,x,y,z,   0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][0]],1,false,true) end
-	  if b2 == 0 or b2 == 0xffffffff then addFace(mapMesh,dataindex,x+1,y,z, 0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][1]],1,true,true) end
-	  if b3 == 0 or b3 == 0xffffffff then addFace(mapMesh,dataindex,x,y,z,   1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][2]],1,true) end
-	  if b4 == 0 or b4 == 0xffffffff then addFace(mapMesh,dataindex,x,y+1,z, 1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][3]],1,false) end
-	  if b5 == 0 or b5 == 0xffffffff then addFace(mapMesh,dataindex,x,y,z,   1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][4]],1,false) end
-	  if b6 == 0 or b6 == 0xffffffff then addFace(mapMesh,dataindex,x,y,z+1, 1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][5]],1,true) end
+	  if b1 == 0 then addFace(mapMesh,dataindex,x,y,z,   0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][0]],1,false,true) end
+	  if b2 == 0 then addFace(mapMesh,dataindex,x+1,y,z, 0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][1]],1,true,true) end
+	  if b3 == 0 then addFace(mapMesh,dataindex,x,y,z,   1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][2]],1,true) end
+	  if b4 == 0 then addFace(mapMesh,dataindex,x,y+1,z, 1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][3]],1,false) end
+	  if b5 == 0 then addFace(mapMesh,dataindex,x,y,z,   1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][4]],1,false) end
+	  if b6 == 0 then addFace(mapMesh,dataindex,x,y,z+1, 1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][5]],1,true) end
 	end
 end
 
-function chunk_t:genMesh(world:*octree_t)
+function chunk_t:genMesh(world:*octree_t,returnOnly:facultative(boolean)):(Mesh,boolean)
+
 	local mapMesh:Mesh = {0}
 
 	--To quickly strip out invisible chunks
 	--print(self.blockAmount)
-	if self.blockAmount==0 then UploadMesh(&mapMesh,false); return mapMesh,false end
+	if self.blockAmount==0 or self.state==CHUNK_STATES.EMPTY then
+		##if returnOnly.type.is_niltype or not returnOnly.value then --FALSE
+			--print "Hitler was there"
+   	--UploadMesh(&mapMesh,false);
+		##end
+		return mapMesh,false end
 	if self.blockAmount==CHUNK_SIZE_MAXBLOCKS then
 		--print((@*chunk_t)(self.parent_node:getNode(self.pos.x+CHUNK_SIZE,self.pos.y,self.pos.z)).blockAmount,(@*chunk_t)(self.parent_node:getNode(self.pos.x-CHUNK_SIZE,self.pos.y,self.pos.z)).blockAmount,(@*chunk_t)(self.parent_node:getNode(self.pos.x,self.pos.y+CHUNK_SIZE,self.pos.z)).blockAmount,(@*chunk_t)(self.parent_node:getNode(self.pos.x,self.pos.y-CHUNK_SIZE,self.pos.z)).blockAmount,(@*chunk_t)(self.parent_node:getNode(self.pos.x,self.pos.y,self.pos.z+CHUNK_SIZE)).blockAmount,(@*chunk_t)(self.parent_node:getNode(self.pos.x,self.pos.y,self.pos.z-CHUNK_SIZE)).blockAmount)
 		if (@*chunk_t)(self.parent_node:getNode(self.pos.x+CHUNK_SIZE,self.pos.y,self.pos.z)).blockAmount ==CHUNK_SIZE_MAXBLOCKS and
@@ -344,7 +344,14 @@ function chunk_t:genMesh(world:*octree_t)
 		   (@*chunk_t)(self.parent_node:getNode(self.pos.x,self.pos.y+CHUNK_SIZE,self.pos.z)).blockAmount ==CHUNK_SIZE_MAXBLOCKS and
 		   (@*chunk_t)(self.parent_node:getNode(self.pos.x,self.pos.y-CHUNK_SIZE,self.pos.z)).blockAmount ==CHUNK_SIZE_MAXBLOCKS and
 		   (@*chunk_t)(self.parent_node:getNode(self.pos.x,self.pos.y,self.pos.z+CHUNK_SIZE)).blockAmount ==CHUNK_SIZE_MAXBLOCKS and
-		   (@*chunk_t)(self.parent_node:getNode(self.pos.x,self.pos.y,self.pos.z-CHUNK_SIZE)).blockAmount ==CHUNK_SIZE_MAXBLOCKS then UploadMesh(&mapMesh,false); return mapMesh,false end
+		   (@*chunk_t)(self.parent_node:getNode(self.pos.x,self.pos.y,self.pos.z-CHUNK_SIZE)).blockAmount ==CHUNK_SIZE_MAXBLOCKS then
+				##if returnOnly.type.is_niltype or not returnOnly.value then --FALSE
+					--print "Hitler was there"
+		   	--UploadMesh(&mapMesh,false);
+				##end
+
+		   	return mapMesh,false
+		  end
 	end
 --print()
 	if self.blockAmount == CHUNK_SIZE_MAXBLOCKS then
@@ -394,6 +401,12 @@ function chunk_t:genMesh(world:*octree_t)
 	        	self:meshBlock(x,CHUNK_SIZE-1,z,world,mapMesh,&dataindex)
 				end
 			end
+		else
+			##if returnOnly.type.is_niltype or not returnOnly.value then --FALSE
+				--print "Hitler was there"
+				--UploadMesh(&mapMesh,false)
+			##end
+			return mapMesh,false	  
 		end		
 	else
 		local facecount = 0
@@ -418,10 +431,19 @@ function chunk_t:genMesh(world:*octree_t)
 	        end
 	      end
 	    end
+		else
+			##if returnOnly.type.is_niltype or not returnOnly.value then --FALSE
+				--print "Hitler was there"
+				--UploadMesh(&mapMesh,false)
+			##end
+			return mapMesh,false	   	
 		end
 	end
 
-	UploadMesh(&mapMesh,false)
+	##if returnOnly.type.is_niltype or not returnOnly.value then --FALSE
+		--print(mapMesh.vertexCount)
+		UploadMesh(&mapMesh,false)
+	##end
 	return mapMesh,true
 end
 
@@ -451,8 +473,8 @@ function octree_t:genMesh(step:int64)
 	for x=0, step*CHUNK_SIZE-1, step do
 	  for y=0, step*CHUNK_SIZE-1, step do
 	    for z=0, step*CHUNK_SIZE-1, step do
-	    		local a = self:getBlock(center, x,y,z,true)
-					if a ~= 0 and a ~= 0xffffffff then
+	    		local a1 = self:getBlock(center, x,y,z,true)
+					if a1 ~= 0then
 						local a = self:getBlock(center, x+step,y,z,true)
 						local b = self:getBlock(center, x-step,y,z,true)
 						local c = self:getBlock(center, x,y+step,z,true)
@@ -460,12 +482,12 @@ function octree_t:genMesh(step:int64)
 						local e = self:getBlock(center, x,y,z+step,true)
 						local f = self:getBlock(center, x,y,z-step,true)
 
-						if a == 0 or a == 0xffffffff then facecount = facecount + 1 end
-						if b == 0 or b == 0xffffffff then facecount = facecount + 1 end
-						if c == 0 or c == 0xffffffff then facecount = facecount + 1 end
-						if d == 0 or d == 0xffffffff then facecount = facecount + 1 end
-						if e == 0 or e == 0xffffffff then facecount = facecount + 1 end
-						if f == 0 or f == 0xffffffff then facecount = facecount + 1 end
+						if a == 0 then facecount = facecount + 1 end
+						if b == 0 then facecount = facecount + 1 end
+						if c == 0 then facecount = facecount + 1 end
+						if d == 0 then facecount = facecount + 1 end
+						if e == 0 then facecount = facecount + 1 end
+						if f == 0 then facecount = facecount + 1 end
 			  end
   	  end
   	end
@@ -480,14 +502,14 @@ function octree_t:genMesh(step:int64)
       for x=0, step*CHUNK_SIZE-1, step do
         for y=0, step*CHUNK_SIZE-1, step do
 					local b0 = self:getBlock(center, x,y,z,true)
-					if b0 ~= 0 and b0==0xffffffff then
+					if b0 ~= 0 then
 						local b1,b2,b3,b4,b5,b6 = self:getBlock(center, x-step,y,z,true),self:getBlock(center, x+step,y,z,true),self:getBlock(center, x,y-step,z,true),self:getBlock(center, x,y+step,z,true),self:getBlock(center, x,y,z-step,true),self:getBlock(center, x,y,z+step,true)
-					 	if b1 == 0 or b1==0xffffffff  then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][0]],1,false,true) end
-					 	if b2 == 0 or b2==0xffffffff  then addFace(mapMesh,&dataindex,x//step+1,y//step,z//step, 0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][1]],1,true,true) end
-					 	if b3 == 0 or b3==0xffffffff  then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][2]],1,true) end
-					 	if b4 == 0 or b4==0xffffffff  then addFace(mapMesh,&dataindex,x//step,y//step+1,z//step, 1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][3]],1,false) end
-					 	if b5 == 0 or b5==0xffffffff  then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][4]],1,false) end
-					 	if b6 == 0 or b6==0xffffffff  then addFace(mapMesh,&dataindex,x//step,y//step,z//step+1, 1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][5]],1,true) end
+					 	if b1 == 0 then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][0]],1,false,true) end
+					 	if b2 == 0 then addFace(mapMesh,&dataindex,x//step+1,y//step,z//step, 0,1,2, TEXTURE_UVS[TEXTURE_[b0-1][1]],1,true,true) end
+					 	if b3 == 0 then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][2]],1,true) end
+					 	if b4 == 0 then addFace(mapMesh,&dataindex,x//step,y//step+1,z//step, 1,0,2, TEXTURE_UVS[TEXTURE_[b0-1][3]],1,false) end
+					 	if b5 == 0 then addFace(mapMesh,&dataindex,x//step,y//step,z//step,   1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][4]],1,false) end
+					 	if b6 == 0 then addFace(mapMesh,&dataindex,x//step,y//step,z//step+1, 1,2,0, TEXTURE_UVS[TEXTURE_[b0-1][5]],1,true) end
 					end
         end
       end
@@ -503,11 +525,45 @@ function octree_t:genMesh(step:int64)
 end
 
 function chunk_t:loadTexture(world:*octree_t)
-	if self.state==CHUNK_STATES.VOID then return end
+	assert(C.mtx_lock(&self.blockMutex) == C.thrd_success)
+	if self.state==CHUNK_STATES.VOID then	return end
+
 	local mapMesh,boolean = self:genMesh(self.parent_node)
-	UnloadModel(self.model)
+	print(self.state)
+	if self.state== CHUNK_STATES.MODEL_DONE then
+		alloc:dealloc(&self.mesh)
+		--UnloadMesh(self.mesh)
+		UnloadModel(self.model)
+	end
+
 	local mapModel = LoadModelFromMesh(mapMesh)
-	self.mesh=mapMesh
+  self.mesh=&mapMesh
+	mapModel.materials.maps.texture=texture
+	self.model=mapModel
+	--print(boolean)
+	if not boolean then
+		self.state=CHUNK_STATES.TRANSPARENT
+	else
+		self.state=CHUNK_STATES.MODEL_DONE
+	end
+	assert(C.mtx_unlock(&self.blockMutex) == C.thrd_success)
+end
+
+function chunk_t:UploadTexture(mapMesh:Mesh,boolean:boolean)
+	assert(C.mtx_lock(&self.blockMutex) == C.thrd_success)
+	if self.state==CHUNK_STATES.VOID then	return end
+
+	--print(self.state)
+	--[[
+	if self.state== CHUNK_STATES.MODEL_DONE then
+		alloc:dealloc(self.mesh)
+		self.mesh=&mapMesh
+		--UnloadMesh(self.mesh)
+		--UnloadModel(self.model)
+	end--]]
+	UploadMesh(&mapMesh,false)
+
+	local mapModel = LoadModelFromMesh(mapMesh)
 	mapModel.materials.maps.texture=texture
 	self.model=mapModel
 	if not boolean then
@@ -515,7 +571,9 @@ function chunk_t:loadTexture(world:*octree_t)
 	else
 		self.state=CHUNK_STATES.MODEL_DONE
 	end
+	assert(C.mtx_unlock(&self.blockMutex) == C.thrd_success)
 end
+
 
 function chunk_t:remesh(world:*octree_t)
 	self:loadTexture(world)
@@ -550,15 +608,18 @@ local ores:fnl_state = fnlCreateState()
 	ores.frequency=0.4
 	ores.noise_type = FNL_NOISE_VALUE--_CUBIC
 global function genChunk(chunk:*chunk_t, x:int64,y:int64,z:int64)
+	assert(C.mtx_lock(&chunk.blockMutex) == C.thrd_success)
+
 	x=x*CHUNK_SIZE
 	y=y*CHUNK_SIZE
 	z=z*CHUNK_SIZE
 	if y > 256+128 or y < -256-128 then 
 		chunk.state = CHUNK_STATES.VOID
 		chunk.blockAmount=0
+		assert(C.mtx_unlock(&chunk.blockMutex) == C.thrd_success)
 		return chunk
 	end
-	chunk.state=CHUNK_STATES.GENERATED
+	--chunk.state=CHUNK_STATES.GENERATED
 	--chunk.class = &CHUNK_CLASS
 	chunk.pos = Cube{x,y,z,CHUNK_SIZE}
 	local h:int64
@@ -567,7 +628,7 @@ global function genChunk(chunk:*chunk_t, x:int64,y:int64,z:int64)
 
 	for i:uint64 = 0,CHUNK_SIZE-1 do
 		for j:uint64 = 0,CHUNK_SIZE-1 do
-			h  = fnlGetNoise2D(heightMap,i+x,j+z)*256
+			h  = C.floor(fnlGetNoise2D(heightMap,i+x,j+z)*256)
 			for k:uint64 = 0,CHUNK_SIZE-1 do
 
 				--fnlDomainWarp3D(caves,&i,&k,&j)
@@ -603,8 +664,14 @@ global function genChunk(chunk:*chunk_t, x:int64,y:int64,z:int64)
 	--UnloadImage(tempImg)
 	--UnloadImage(tempImg2)
 	chunk.blockAmount = blockAmount
-	chunk.state=CHUNK_STATES.GENERATED
+	if blockAmount==0 then
+		chunk.state=CHUNK_STATES.EMPTY
+	else
+		chunk.state=CHUNK_STATES.GENERATED
+	end
 	--print(GetTime()-time_sample)
+
+	assert(C.mtx_unlock(&chunk.blockMutex) == C.thrd_success)
 	return chunk
 end--]===]
 

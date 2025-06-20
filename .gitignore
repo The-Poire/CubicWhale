@@ -1,3 +1,8 @@
 libfibre
 callgrind.out.*
 gmon.out
+minilua
+luaray
+c89thread
+_outpout.*
+*.sh

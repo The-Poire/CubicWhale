@@ -3,12 +3,8 @@ require 'memory'
 require 'hash'
 require 'span'
 require 'C'
-require 'C.threads'
+--require 'C.threads'
 require 'baseObjects'
-
-require 'allocators.default'
-local Allocator: type = #[DefaultAllocator]#
-local alloc:Allocator
 
 global GRAVITY:float64 <const> = -1
 global AIR_FRICTION:float64 <const> = .99
@@ -114,7 +110,7 @@ function entity_t:collide(world:octree_t)
 				--for l = 0,5 do
 					local blk = world:getBlock((@*chunk_t)(world:getNode(i,k,j)),i,k,j,true)
 					--print(blk)
-					if blk~=0 and blk~=0xffffffff then
+					if blk~=0 and blk~=0xffffffff_u32 then
 						return CheckCollisionBoxes(BoundingBox{self.pos,self.pos+self.size},BoundingBox{Vector3{i,k,j},Vector3{i+1,k+1,j+1}})
 					end
 					--[==[rays[4].position=self.pos

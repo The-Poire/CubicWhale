@@ -1,5 +1,20 @@
 require 'raylib/raylib'
 require 'C.math'
+##pragmas.nogc = true
+require 'thread'
+local __PRINT_MUTEX: C.mtx_t
+global function safeprint(...: varargs)
+  assert(C.mtx_lock(&__PRINT_MUTEX) == C.thrd_success)
+  print(...)
+  assert(C.mtx_unlock(&__PRINT_MUTEX) == C.thrd_success)
+end
+global __MEMORY_MUTEX: C.mtx_t
+assert(C.mtx_init(&__MEMORY_MUTEX, C.mtx_plain) == C.thrd_success)
+
+
+  require 'allocators.default'
+  global libBO_allocator: type = #[DefaultAllocator]#
+  global alloc:libBO_allocator
 
 require 'string'
 global function toByte(str:string):byte
@@ -15,7 +30,7 @@ end
 global function loadByteMask(x:int64,y:int64,z:int64) <inline>
 	local byte_mask:byte = x + y*4 + z*16
 	local offset:byte
-	--print(byte_mask)
+	--safeprint(byte_mask)
 	switch byte_mask do
 	case 0  then byte_mask=0b00000001; offset = 0
 	case 1  then byte_mask=0b00000010; offset = 1
@@ -33,9 +48,12 @@ end
 global function AllocateMeshData(mesh:*Mesh,triangleCount:integer)
 	mesh.vertexCount = triangleCount*3
 	mesh.triangleCount = triangleCount
+  assert(C.mtx_lock(&__MEMORY_MUTEX) == C.thrd_success)
 
-	mesh.vertices = (@*float32)(MemAlloc(mesh.vertexCount * 3 * #float32))
-	mesh.texcoords = (@*float32)(MemAlloc(mesh.vertexCount * 2 * #float32))
+	mesh.vertices  = (@*float32)(alloc:xalloc0(mesh.vertexCount * 3 * #float32))--(MemAlloc(mesh.vertexCount * 3 * #float32))
+	mesh.texcoords = (@*float32)(alloc:xalloc0(mesh.vertexCount * 2 * #float32))--(MemAlloc(mesh.vertexCount * 2 * #float32))
+
+  assert(C.mtx_unlock(&__MEMORY_MUTEX) == C.thrd_success)
 	--mesh.normals = (@*float32)(MemAlloc(mesh.vertexCount * 3 * #float32))
 	--mesh.colors = (@*cuchar)(MemAlloc(mesh.vertexCount * #cuchar))
 end
@@ -83,11 +101,11 @@ global function subQuad(a:Cube,b:*Cube):(byte,byte,Cube) <inline>
 	--Basic pre-collision test
 	if not (a-b) then return 0b00000000,8 end
 	--Normalize
-	--print(a.x,a.y,a.z,b.x,b.y,b.z)
+	--safeprint(a.x,a.y,a.z,b.x,b.y,b.z)
 	a.x = a.x + a.s//2
 	a.y = a.y + a.s//2
 	a.z = a.z + a.s//2
-	--print(a.x,a.y,a.z,b.x,b.y,b.z)
+	--safeprint(a.x,a.y,a.z,b.x,b.y,b.z)
 	--Calculate
 	if     b.x<a.x and b.y<a.y and b.z<a.z then
 		return 0b00000001,0,(@Cube){

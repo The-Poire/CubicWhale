@@ -1,7 +1,6 @@
 ## cdefine 'RLIGHTS_IMPLEMENTATION'
 require "raylib/raylib"
 
-
 local SCREEN_WIDTH: uint16 <const> = 1000
 local SCREEN_HEIGHT: uint16 <const> = 650
 
@@ -14,7 +13,7 @@ InitWindow(SCREEN_WIDTH,SCREEN_HEIGHT, "WhaleBlock v.0.0.0.00")
 	camera.projection = 0 -- Camera projection type
 	
 	DisableCursor() -- Limit cursor to relative movement inside the window
-	SetTargetFPS(400)
+	SetTargetFPS(10000)
 	SetTraceLogLevel(TraceLogLevel.LOG_WARNING)
 
 local shader:Shader = LoadShader("lighting.vs","lighting.fs")
@@ -26,11 +25,19 @@ local shader:Shader = LoadShader("lighting.vs","lighting.fs")
 
 require 'octreeStruct'
 require 'chunkStruct'
-require 'entityStruct'
-local ent:entity_t = newEntity(entityType.CUBE,Vector3{-.1,200,-.1},Vector3{2,.9,2},1,1,1)
+
+----======INIT ENTITIES======--
+--require 'entityStruct'
+--local ent:entity_t = newEntity(entityType.CUBE,Vector3{-.1,200,-.1},Vector3{2,.9,2},1,1,1)
+
+
+--======INIT THREADS======--
+require 'taskManagerStruct'
+InitThreads()
 
 local WORLD_SIZE <comptime> = 4
 local WORLD_HEIGHT <comptime> = 4
+local WORLD_VOLUME <comptime> = (WORLD_SIZE+1)*(WORLD_SIZE+1)*(WORLD_HEIGHT+1)*8
 local renderDistance <comptime> = 4
 local t = GetTime()
 local _WORLD:octree_t <close> = newOctree(-(1<<62),-(1<<62),-(1<<62),(1_u64<<63)//CHUNK_SIZE)
@@ -43,20 +50,46 @@ for i = -WORLD_SIZE,WORLD_SIZE do
 	for k = -WORLD_HEIGHT,WORLD_HEIGHT do
 		for j = -WORLD_SIZE,WORLD_SIZE do
 			WORLD:addNode(i*CHUNK_SIZE,k*CHUNK_SIZE,j*CHUNK_SIZE)
-			genChunk((@*chunk_t)(WORLD:getNode(i*CHUNK_SIZE,k*CHUNK_SIZE,j*CHUNK_SIZE)),i,k,j)
+			addToQueue(TASKS_IDS.CREATE_CHUNK,{i,k,j},WORLD)
+			--genChunk((@*chunk_t)(WORLD:getNode(i*CHUNK_SIZE,k*CHUNK_SIZE,j*CHUNK_SIZE)),i,k,j)
 		end
 	end
 	print((i+WORLD_SIZE)/(2*WORLD_SIZE)*100)
 end
+
+while not allTasksDone() do
+	print(queueLenght(),(WORLD_VOLUME-queueLenght())/WORLD_VOLUME*100)
+	--assert(C.thrd_sleep(&(@C.timespec){tv_nsec=1000000000},nilptr) == C.thrd_success)  --to avoid blocking CPU
+	WaitTime(0.5)
+end
+
 print("World generation took :",GetTime()-t,"seconds")
 local t2=GetTime()
 for i = -WORLD_SIZE,WORLD_SIZE do
 	for k = -WORLD_HEIGHT,WORLD_HEIGHT do
 		for j = -WORLD_SIZE,WORLD_SIZE do
-			((@*chunk_t)(WORLD:getNode(i*CHUNK_SIZE,k*CHUNK_SIZE,j*CHUNK_SIZE))):loadTexture(WORLD)
+			--((@*chunk_t)(WORLD:getNode(i*CHUNK_SIZE,k*CHUNK_SIZE,j*CHUNK_SIZE))):loadTexture(WORLD)
+			addToQueue(TASKS_IDS.LOAD_CHUNK_TEXTURE,{i*CHUNK_SIZE,k*CHUNK_SIZE,j*CHUNK_SIZE},WORLD)
 		end
 	end
 	print((i+WORLD_SIZE)/(2*WORLD_SIZE)*100)
+end
+
+while (not allTasksDone()) and (#MeshGPUQueue>=0) do
+	--print(#MeshGPUQueue,queueLenght(),(WORLD_VOLUME-queueLenght())/WORLD_VOLUME*100)
+	--assert(C.thrd_sleep(&(@C.timespec){tv_nsec=1000000000},nilptr) == C.thrd_success)  --to avoid blocking CPU
+	assert(C.mtx_lock(&MeshGPUQueue_mtx) == C.thrd_success)
+		for i = 0,<#MeshGPUQueue do
+			local itm = MeshGPUQueue:pop()
+			print(itm.x)
+			local chk = ((@*chunk_t)(WORLD:getNode(itm.x,itm.y,itm.z)))
+			chk:UploadTexture(itm.mapMesh,itm.boolean)
+
+		end
+	assert(C.mtx_unlock(&MeshGPUQueue_mtx) == C.thrd_success)
+	--print(#MeshGPUQueue +1)
+	--WaitTime(0.1)
+
 end
 print(-(1<<62),-(1<<62),-(1<<62),(1_u64<<63)//CHUNK_SIZE)
 print("Chunk meshing took :",GetTime()-t2,"seconds")
@@ -80,9 +113,9 @@ global function drawing(block: function()) <inline>
   --assert(C.mtx_unlock(&mutex) == C.thrd_success)
   block()
   DrawFPS(10, 10);
-  DrawText(tostring(camera.position.x),2,40,15,RED)
-  DrawText(tostring(camera.position.y),2,60,15,RED)
-  DrawText(tostring(camera.position.z),2,80,15,RED)
+  --DrawText(tostring(camera.position.x),2,40,15,RED)
+  --DrawText(tostring(camera.position.y),2,60,15,RED)
+  --DrawText(tostring(camera.position.z),2,80,15,RED)
   --print(tostring(camera.position.y))
   EndDrawing()
 end
@@ -107,38 +140,52 @@ global function drawLoop() <inline>
 					v3=v2/#v2
 					d=Vector3DistanceSqr(camera.position,v4)
 					--print(v1.x,v1.y,v1.z,v2.x,v2.y,v2.z,(Vector3Angle(v1,v2)))
-					if ((Vector3Angle(v1,v3)) < 2.1 and d>CHUNK_SIZE*CHUNK_SIZE*10) or d>((renderDistance)*(renderDistance)*CHUNK_SIZE*CHUNK_SIZE +CHUNK_SIZE*CHUNK_SIZE*5*5) then continue end
+					if ((Vector3Angle(v1,v3)) < 2.1 and d>CHUNK_SIZE*CHUNK_SIZE*10) --[[or d>(renderDistance*CHUNK_SIZE*#[math.sqrt(3)]# + CHUNK_SIZE_DIAGONAL)]] then continue end
 					chk=(@*chunk_t)(WORLD:getNode(i,k,j))
+					--print(chk.state)
 					if chk.state==CHUNK_STATES.VOID then
 							WORLD:addNode(i,k,j)
+							addToQueue(TASKS_IDS.CREATE_CHUNK,{i//CHUNK_SIZE,k//CHUNK_SIZE,j//CHUNK_SIZE},WORLD)
+							--addToQueue(TASKS_IDS.FULL_CHUNK,{i,k,j},WORLD)
 							chk = (@*chunk_t)(WORLD:getNode(i,k,j))
-							genChunk(chk,i//CHUNK_SIZE,k//CHUNK_SIZE,j//CHUNK_SIZE)
-							chk:loadTexture(WORLD)--remesh(WORLD)
+							--print(chk.state)
+							--genChunk(chk,i//CHUNK_SIZE,k//CHUNK_SIZE,j//CHUNK_SIZE)
+							--print(chk.state)
+							--addToQueue(TASKS_IDS.LOAD_CHUNK_TEXTURE,{i,k,j},WORLD)
+							--print(chk.state)
 					end
+					if chk.state == CHUNK_STATES.GENERATED then
+						--chk:loadTexture(WORLD)--remesh(WORLD)
+						addToQueue(TASKS_IDS.LOAD_CHUNK_TEXTURE,{i,k,j},WORLD)
+					end
+					--if chk.state == CHUNK_STATES.GENERATED and chk.state~=CHUNK_STATES.LOADING then
+					--	addToQueue(TASKS_IDS.LOAD_CHUNK_TEXTURE,{i,k,j},WORLD)
+					--end
 					chk:draw()
 				end
 			end
 		end
-		ent:draw()
-	--local oct:*octree_t
-	--	for i = C.floor(camera.position.x)-2*CHUNK_SIZE*renderDistance,C.floor(camera.position.x)+2*CHUNK_SIZE*renderDistance,2*CHUNK_SIZE do
-	--		for k = C.floor(camera.position.y)+2*CHUNK_SIZE*renderDistance,C.floor(camera.position.y)-2*CHUNK_SIZE*renderDistance,-2*CHUNK_SIZE do
-	--			for j = C.floor(camera.position.z)-2*CHUNK_SIZE*renderDistance,C.floor(camera.position.z)+2*CHUNK_SIZE*renderDistance,2*CHUNK_SIZE do
-	--				--local ang = math.abs(Vector3DotProduct((camera.target/(#camera.target)),((camera.position-Vector3{i,k,j})/#(camera.position-Vector3{i,k,j}))))
-	--				v4=Vector3{i,k,j}+Vector3{CHUNK_SIZE,CHUNK_SIZE,CHUNK_SIZE}
-	--				v1,v2 = GetCameraForward(&camera),camera.position-v4
-	--				v3=v2/#v2
-	--				d=Vector3DistanceSqr(camera.position,v4)
-	--				--print(v1.x,v1.y,v1.z,v2.x,v2.y,v2.z,(Vector3Angle(v1,v2)))
-	--				if ((Vector3Angle(v1,v3)) < 2.1 or d<((renderDistance//2)*(renderDistance//2)*CHUNK_SIZE*CHUNK_SIZE)+CHUNK_SIZE*CHUNK_SIZE) then continue end
-	--				oct=(@*octree_t)(WORLD:getNodeRoot(i,k,j))
-	--				if oct.ready == 0 and oct.pos.s == CHUNK_SIZE*2 then
-	--					oct:genMesh(oct.pos.s//CHUNK_SIZE)
-	--				end
-	--				oct:draw()
-	--			end
-	--		end
-	--	end
+		--ent:draw()
+	--[[local oct:*octree_t
+		for i = C.floor(camera.position.x)-2*CHUNK_SIZE*renderDistance,C.floor(camera.position.x)+2*CHUNK_SIZE*renderDistance,2*CHUNK_SIZE do
+			for k = C.floor(camera.position.y)+2*CHUNK_SIZE*renderDistance,C.floor(camera.position.y)-2*CHUNK_SIZE*renderDistance,-2*CHUNK_SIZE do
+				for j = C.floor(camera.position.z)-2*CHUNK_SIZE*renderDistance,C.floor(camera.position.z)+2*CHUNK_SIZE*renderDistance,2*CHUNK_SIZE do
+					--local ang = math.abs(Vector3DotProduct((camera.target/(#camera.target)),((camera.position-Vector3{i,k,j})/#(camera.position-Vector3{i,k,j}))))
+					v4=Vector3{i,k,j}+Vector3{CHUNK_SIZE,CHUNK_SIZE,CHUNK_SIZE}
+					v1,v2 = GetCameraForward(&camera),camera.position-v4
+					v3=v2/#v2
+					d=Vector3DistanceSqr(camera.position,v4)
+					--print(v1.x,v1.y,v1.z,v2.x,v2.y,v2.z,(Vector3Angle(v1,v2)))
+					if ((Vector3Angle(v1,v3) < 2.1) or (d//CHUNK_SIZE<(renderDistance*CHUNK_SIZE*#[math.sqrt(3)]# - CHUNK_SIZE_DIAGONAL))) then continue end
+					oct=(@*octree_t)(WORLD:getNodeRoot(i,k,j))
+					if oct.ready == 0 and oct.pos.s == CHUNK_SIZE*2 then
+						--oct:genMesh(oct.pos.s//CHUNK_SIZE)
+					end
+					--oct:draw()
+				end
+			end
+		end
+	--]]
 end
 
 -- Main game loop
@@ -193,9 +240,16 @@ while not WindowShouldClose() do        -- Detect window close button or ESC key
   		end
   	end
   end
+	for i = 0,<#MeshGPUQueue do assert(C.mtx_lock(&MeshGPUQueue_mtx) == C.thrd_success)
+			local itm = MeshGPUQueue:pop()
+			local chk = ((@*chunk_t)(WORLD:getNode(itm.x,itm.y,itm.z)))
+			chk:UploadTexture(itm.mapMesh,itm.boolean)
+		assert(C.mtx_unlock(&MeshGPUQueue_mtx) == C.thrd_success)
+	end
+	--print(#MeshGPUQueue)
 
 	UpdateCamera(&camera, CameraMode.CAMERA_CUSTOM)
-	ent:update(WORLD,GetFrameTime())
+	--ent:update(WORLD,GetFrameTime())
 	--cameraPos = Vector3{ camera.position.x, camera.position.y, camera.position.z };
 	--SetShaderValue(shader, shader.locs[SHADER_LOC_VECTOR_VIEW], &cameraPos, SHADER_UNIFORM_VEC3);
 	

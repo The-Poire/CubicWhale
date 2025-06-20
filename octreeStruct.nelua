@@ -3,12 +3,12 @@ require 'memory'
 require 'hash'
 require 'span'
 require 'C'
-require 'C.threads'
+--require 'C.threads'
 require 'baseObjects'
 
 require 'allocators.default'
-local Allocator: type = #[DefaultAllocator]#
-local alloc:Allocator
+--global Allocator: type = #[DefaultAllocator]#
+--local alloc:Allocator
 
 global octree_t:type = @record{
 	parent_node:*octree_t,
@@ -157,7 +157,10 @@ function octree_t:addNode(x:int64,y:int64,z:int64)
 
 			--print(byte_mask,offset,_x,_y,_z)
 			if unlikely(currOct.child_nodes[offset] == nilptr) then--and packed_bool(currOct.child_types,offset+1) and currOct.pos.s>=CHUNK_SIZE*2 then
-				local oct:pointer = (alloc:alloc0(#@octree_t))
+				assert(C.mtx_lock(&__MEMORY_MUTEX) == C.thrd_success)
+					local oct:pointer = (alloc:alloc0(#@octree_t))
+  			assert(C.mtx_unlock(&__MEMORY_MUTEX) == C.thrd_success)
+
 				dealloc_list:push(oct)
 				--print(currOct.pos.s//CHUNK_SIZE//2)
 				newOctree(_x,_y,_z,
@@ -176,7 +179,9 @@ function octree_t:addNode(x:int64,y:int64,z:int64)
 			--print(currOct.pos.s)
 			--print(currOct.child_types,byte_mask,currOct.child_types | byte_mask)
 			currOct.child_types = currOct.child_types | byte_mask
-			local chk:pointer = (alloc:alloc0(#@chunk_t))
+			assert(C.mtx_lock(&__MEMORY_MUTEX) == C.thrd_success)
+				local chk:pointer = (alloc:alloc0(#@chunk_t))
+  		assert(C.mtx_unlock(&__MEMORY_MUTEX) == C.thrd_success)
 			--print("Creating Chunk at",self.pos.x+x*CHUNK_SIZE,self.pos.y+y*CHUNK_SIZE,self.pos.z+z*CHUNK_SIZE,(@*chunk_t)(chk),self)
 			newChunk(_x,_y,_z,(@*chunk_t)(chk),currOct)
 			currOct.child_nodes[offset] = chk
